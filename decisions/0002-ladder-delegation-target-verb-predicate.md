@@ -125,9 +125,13 @@ server, whose copy is never the account's log of record.
 
 ## Consequences
 
-- The reference server implements predicates 1 to 6. The replicas-route shape is
-  decided but not implemented here, and the replicas route is controller-only
-  until it is.
+- The reference server implements predicates 1 to 6 and the replicas-route
+  shape, as its seventh predicate, admitted only where the delegator's log is a
+  replicated copy. The replicas route admits a delegated invocation whose
+  invoked capability targets the replicas URL or a URL beneath it, bounds a
+  delegated create (POST, or PUT at an absent id) to a `fromSpace` a
+  registration on the Space already names, and refuses a delegated pause of the
+  registration that maps the Space's controller.
 - The client-annex profile version is `0.1`. A change to what the clause admits
   is a new version.
 - A DELETE admitted under predicate 3, and every replicas-route grant, writes no
@@ -177,3 +181,16 @@ Reopen this decision when one or more of the following holds:
   a did:webvh path of `space:server:id` on any host, and the auxiliary-Space
   target is the Space carrying the annex log. The consequence on predicate 2's
   second branch stands, pinned by a test.
+- 2026-10-31: the replicas-route shape is implemented as the seventh predicate,
+  and the replicas route trades `controller-only` for a `replicas-subtree`
+  container rule, so a data grant on the Space URL stays out while the
+  maintenance grant passes. The create bound covers a PUT at an absent id as
+  well as a POST, since a PUT there creates through the same checks; a
+  replacement needs none, `fromSpace` being fixed by PUT. The refusal is
+  `replica-refused` (409) on `#/fromSpace`, decided before the source is read
+  and again inside the write's critical section. A delegated pause of the
+  registration that maps the Space's controller is refused the same way on
+  `#/pausedAt`, since a paused copy would keep a withdrawn key current. The
+  shape's `allowedAction` set admits `HEAD`, which every `GET` route answers.
+  The shape is refused where the delegator's log is self-hosted, so it holds on
+  a replica server only, as decided. The client-annex profile stays at `0.1`.

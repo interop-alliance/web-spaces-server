@@ -91,7 +91,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@interop/did-cli": "^0.18.0",
-    "@interop/pws-client": "^0.105.0",
+    "@interop/pws-client": "^0.106.0",
     "@interop/pws-conformance-suite": "^0.36.0",
     "@interop/webkms-client": "^15.0.3",
     "@types/mime-types": "3.0.1",

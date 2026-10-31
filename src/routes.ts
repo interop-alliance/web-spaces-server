@@ -700,9 +700,12 @@ export async function initSpaceRoutes(
   app.put('/space/:spaceId/backends/:backendId', BackendRequest.put)
   app.delete('/space/:spaceId/backends/:backendId', BackendRequest.delete)
 
-  // Replica registrations (reserved segment). Every method is controller-only,
-  // the reads included, so each `GET` demands the auth headers (401) rather
-  // than passing as a public read.
+  // Replica registrations (reserved segment). Every method admits the Space
+  // controller's root invocation and a delegated invocation whose invoked
+  // capability targets the replicas URL or a URL beneath it, the
+  // `replicas-subtree` container rule (`requests/ReplicaRequest.ts`), which
+  // keeps a data grant on the Space URL out. Each `GET` demands the auth
+  // headers (401) rather than passing as a public read.
   app.get<{ Params: { spaceId: string } }>(
     '/space/:spaceId/replicas',
     { onRequest: requireAuthHeaders },

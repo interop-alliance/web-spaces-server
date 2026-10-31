@@ -9,7 +9,7 @@
  * ladder-anchored account document. It is recognized purely by relation
  * asymmetry -- a `capabilityDelegation` member absent from
  * `capabilityInvocation` -- so no marker vocabulary is consulted. A delegation
- * whose proof VM resolves to a ladder VM is admitted iff one of six
+ * whose proof VM resolves to a ladder VM is admitted iff one of seven
  * predicates holds:
  *
  * 1. Annex-DID controller inside the account Space's items subtree. Three
@@ -103,6 +103,27 @@
  *    auxiliary-Space pull survives it today through predicate 2 branch two,
  *    which admits a GET of a bookkeeping Space to any grantee with no
  *    pointer check; the predicates are alternatives.
+ * 7. Replicas-route maintenance. The delegation's `invocationTarget` is a
+ *    Space's replicas URL `/space/<S>/replicas` exactly, its `allowedAction`
+ *    is present, non-empty, and within {GET, HEAD, POST, PUT, DELETE}, its
+ *    parent is that Space's synthesized root, and the delegator's log is a
+ *    replicated copy, not a log self-hosted here. No grantee bound and no
+ *    pointer gate apply. This is the shape a replica server sees on a
+ *    promoted replica Space, whose controller is the account did:webvh. A
+ *    credential-anchored account holds no key that can root-invoke there, so
+ *    a wallet session signs this grant with the ladder VM to its own bare
+ *    did:key and invokes it as that did:key. With it the session lists,
+ *    re-registers, replaces a pull capability in place, pauses and resumes,
+ *    and removes a registration. The replica server cannot gate it on the
+ *    annex pointer. Its copy of the annex document lags the source by a pull
+ *    and does not exist before the auxiliary Space is copied. The route bounds
+ *    what the grant reaches instead. A delegated create (POST, or PUT at an
+ *    absent id) admits only a `fromSpace` a registration already on that Space
+ *    names, a delegated pause of the registration that maps the Space's
+ *    controller is refused, and Delete Replica keeps that registration
+ *    (`requests/ReplicaRequest.ts`). On the server that hosts the account's
+ *    log of record the shape is refused, since there the account's own
+ *    predicates and the controller's root invocation maintain the Space.
  *
  * Under the v0.4 layout predicate 3 targeted the bare (no-slash) Space URL.
  * That gave DELETE no different reach from today's: the zcap library's target
@@ -185,7 +206,13 @@
  * and stays inside the account Space's items subtree, can only write a log, or
  * is a target-exact single-verb DELETE of one Space or GET of one Space
  * Metadata object of the delegator's own account, or a target-exact GET of
- * one Resource, or is a pull by a server the pointed annex document names.
+ * one Resource, or is a pull by a server the pointed annex document names, or
+ * is a maintenance grant on one Space's replicas route, which can re-register
+ * only against a source already registered there and cannot pause or remove
+ * the registration that maps the Space's controller. The replicas-route shape
+ * is the one exception to the record rule. It holds only on a replica server,
+ * whose copy is never the account's log of record, and the predicate reads
+ * the delegator's log location to refuse it elsewhere.
  * The third shape is a read, or a destruction whose
  * account-Space case removes the log any record would live in; the fourth is
  * a read alone. A DELETE admitted under predicate 3 writes no log. Two bounds
@@ -254,6 +281,7 @@ import {
 import {
   absoluteSpaceUrl,
   absoluteUrl,
+  replicasPath,
   resourcePath,
   spaceMetaPath,
   spacePath
@@ -688,6 +716,33 @@ function spaceMetaUrlTargetId({
 }
 
 /**
+ * The Space id when a target is a Space's replicas URL
+ * (`<base>/space/<S>/replicas`); `undefined` otherwise. The target of a
+ * replicas-route maintenance grant (predicate 7). The listing URL alone: a
+ * registration URL beneath it has a longer tail and matches nothing, and the
+ * grant reaches those by attenuation. The exact comparison is
+ * `localSpaceTargetId`'s, against the canonical path.
+ * @param options {object}
+ * @param options.target {string}   the delegation's `invocationTarget`
+ * @param options.serverUrl {string}   this server's base URL
+ * @returns {string | undefined}
+ */
+function replicasUrlTargetId({
+  target,
+  serverUrl
+}: {
+  target: string
+  serverUrl: string
+}): string | undefined {
+  return localSpaceTargetId({
+    target,
+    serverUrl,
+    canonicalPath: ({ spaceId, tail }) =>
+      tail.length === 1 ? replicasPath({ spaceId }) : undefined
+  })
+}
+
+/**
  * The Space id when a target is a Resource URL (`<base>/space/<S>/<C>/<R>`);
  * `undefined` otherwise. All three ids are URL-safe segments, and `<C>` and
  * `<R>` are outside the reserved path-segment registry, so a Collection
@@ -772,7 +827,7 @@ function isWithinSpaceItemsSubtree({
 }
 
 /**
- * Judges one ladder-signed delegation against the six admission predicates.
+ * Judges one ladder-signed delegation against the seven admission predicates.
  * @param options {object}
  * @param options.capability {object}   the dereferenced delegation
  * @param options.doc {DIDDoc}   the resolved account document (the delegator)
@@ -781,6 +836,8 @@ function isWithinSpaceItemsSubtree({
  *   replicated DID the local replica's
  * @param options.logLocation.spaceId {string}
  * @param options.logLocation.collectionId {string}
+ * @param options.logLocation.selfHosted {boolean}   whether the log is the
+ *   DID's own, hosted here, rather than a registration's copy
  * @param options.parent {object}   the chain link this delegation hangs from,
  *   a delegated capability or the synthesized root
  * @param [options.parent.invocationTarget] {string}
@@ -808,7 +865,7 @@ async function ladderDelegationAdmitted({
 }: {
   capability: ChainCapability
   doc: DIDDoc
-  logLocation: { spaceId: string; collectionId: string }
+  logLocation: { spaceId: string; collectionId: string; selfHosted: boolean }
   parent: ChainCapability & { proof?: unknown }
   parentMeta?: { verifyResult?: unknown }
   parentIsRoot: boolean
@@ -902,6 +959,30 @@ async function ladderDelegationAdmitted({
       serverBackends,
       serverUrl
     })
+  ) {
+    return true
+  }
+
+  // Predicate 7: a maintenance grant on a Space's replicas route. The target
+  // is that Space's replicas URL exactly and the parent is the Space's
+  // synthesized root, so the grant hangs off the promoted replica Space itself
+  // and reaches the registrations beneath the URL by attenuation. The actions
+  // lie within the verbs the replicas routes serve. No grantee bound and no
+  // pointer gate apply. The record is on the route instead, which bounds a
+  // delegated create to a source the Space already registers and keeps the
+  // registration that maps the Space's controller unpaused and in place. The
+  // shape holds on a replica server only, where the delegator's log is a
+  // registration's copy. Where the log is self-hosted, this server is the
+  // account's log of record, and the shape would hand a ladder-signed grant
+  // the registrations of the account's own Space with no record anywhere.
+  const replicasSpaceId = replicasUrlTargetId({ target, serverUrl })
+  if (
+    replicasSpaceId !== undefined &&
+    !logLocation.selfHosted &&
+    parentIsRoot &&
+    parent.invocationTarget ===
+      absoluteSpaceUrl({ spaceId: replicasSpaceId, serverUrl }) &&
+    actionsWithin({ capability, allowed: WAS_ACTIONS })
   ) {
     return true
   }
@@ -1197,7 +1278,8 @@ export function clientAnnexChainInspector({
               "management capability the Space's controller delegated to the " +
               'account, nor a GET/HEAD pull of the account Space or its ' +
               'client-annex Space by a replica server the annex document ' +
-              'points at.'
+              "points at, nor a maintenance grant on that Space's replicas " +
+              'URL under its root.'
           )
         }
       }

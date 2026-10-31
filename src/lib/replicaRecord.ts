@@ -21,7 +21,11 @@ import { formatEtag, mintValidator, stampedValidator } from './etag.js'
 import type { HybridLogicalClock } from './hlc.js'
 import { stampOf, withoutStampMembers } from './hlc.js'
 import { assertReplicaWritePrecondition } from './preconditions.js'
-import { IdConflictError, InvalidRequestBodyError } from '../errors.js'
+import {
+  IdConflictError,
+  InvalidRequestBodyError,
+  ReplicaRefusedError
+} from '../errors.js'
 import type { StoredReplica } from '../types.js'
 
 /**
@@ -105,6 +109,45 @@ export function assertReplacementKeepsFixedMembers({
 }
 
 /**
+ * The bound on a create under a delegated invocation (POST, or PUT at an
+ * absent id): the registration must name a `fromSpace` that a registration
+ * already on the Space names. A delegated grant on the replicas route can
+ * therefore re-register a source the Space has, and cannot introduce a new
+ * one. Without the bound, the holder of a grant a phished credential signed
+ * could register a server of their own as a second source. That source could
+ * serve the account DID as `controller`, which the controller check compares
+ * as a string, and have its tombstones applied to the copy. A root invocation
+ * carries no bound. The request layer runs the check once before the peer is
+ * read, so a refused body costs the source server nothing, and the write
+ * decides it again from the registrations read inside its critical section,
+ * where no concurrent Delete Replica can have emptied the set the first
+ * check saw. A delegated caller may list the registrations, so the refusal
+ * tells it nothing the listing would not.
+ * @param options {object}
+ * @param options.record {ReplicaRegistration}   the registration to create
+ * @param options.registered {StoredReplica[]}   the Space's registrations
+ * @returns {void}
+ * @throws {ReplicaRefusedError}
+ */
+export function assertCreateNamesRegisteredSource({
+  record,
+  registered
+}: {
+  record: ReplicaRegistration
+  registered: StoredReplica[]
+}): void {
+  if (registered.some(stored => stored.record.fromSpace === record.fromSpace)) {
+    return
+  }
+  throw new ReplicaRefusedError({
+    detail:
+      'A delegated invocation may register only a source Space a ' +
+      `registration on this Space already names; none names "${record.fromSpace}". ` +
+      "Registering a new source takes the Space controller's own capability."
+  })
+}
+
+/**
  * The validator of a stored registration: its generation and the stamp
  * members its record carries.
  * @param stored {StoredReplica}
@@ -121,15 +164,16 @@ export function replicaValidator(stored: StoredReplica): EtagValidator {
  * The decision both backends make inside a registration write's critical
  * section, from the stored registration they read there: a create-only
  * write over one is `IdConflictError`, the preconditions are evaluated
- * against its `ETag`, a replacement must keep the fixed members, the
- * validator is minted above its stamp (and the generation with it on a
- * create), and the stored record is composed. The preconditions go before
- * the fixed members, as on every other versioned record: a stale
- * conditional write is told so (412) rather than that its body is malformed
- * (400), which a client treats as final. `pullsChunks` is what the request
- * layer's peer checks found for the client's capability; a replacement that
- * keeps the stored capability keeps the stored value with it. The caller
- * persists what comes back.
+ * against its `ETag`, a replacement must keep the fixed members, a create
+ * under `requireRegisteredSource` must name a source the Space's other
+ * registrations name, the validator is minted above its stamp (and the
+ * generation with it on a create), and the stored record is composed. The
+ * preconditions go before the fixed members, as on every other versioned
+ * record: a stale conditional write is told so (412) rather than that its
+ * body is malformed (400), which a client treats as final. `pullsChunks` is
+ * what the request layer's peer checks found for the client's capability; a
+ * replacement that keeps the stored capability keeps the stored value with
+ * it. The caller persists what comes back.
  * @param options {object}
  * @param [options.prior] {StoredReplica}   the stored registration, if any
  * @param options.record {ReplicaRegistration}   the client's shape
@@ -138,6 +182,11 @@ export function replicaValidator(stored: StoredReplica): EtagValidator {
  * @param options.clock {HybridLogicalClock}   the store's clock
  * @param options.currentSpaceGeneration {() => Promise<string>}   the Space
  *   Metadata object's current generation, read only on a create
+ * @param options.listReplicas {() => Promise<StoredReplica[]>}   the Space's
+ *   registrations, read only on a create under `requireRegisteredSource`
+ * @param [options.requireRegisteredSource] {boolean}   the write is under a
+ *   delegated invocation, so a create must name a registered source
+ *   ({@link assertCreateNamesRegisteredSource})
  * @param [options.createOnly] {boolean}
  * @param [options.ifMatch] {string}
  * @param [options.ifNoneMatch] {HeldValidators}
@@ -146,6 +195,7 @@ export function replicaValidator(stored: StoredReplica): EtagValidator {
  * @throws {IdConflictError}
  * @throws {InvalidRequestBodyError}
  * @throws {PreconditionFailedError}
+ * @throws {ReplicaRefusedError}
  */
 export async function decideReplicaWrite({
   prior,
@@ -153,6 +203,8 @@ export async function decideReplicaWrite({
   pullsChunks,
   clock,
   currentSpaceGeneration,
+  listReplicas,
+  requireRegisteredSource = false,
   createOnly = false,
   ifMatch,
   ifNoneMatch
@@ -162,6 +214,8 @@ export async function decideReplicaWrite({
   pullsChunks: boolean
   clock: HybridLogicalClock
   currentSpaceGeneration: () => Promise<string>
+  listReplicas: () => Promise<StoredReplica[]>
+  requireRegisteredSource?: boolean
   createOnly?: boolean
   ifMatch?: string
   ifNoneMatch?: HeldValidators
@@ -181,6 +235,15 @@ export async function decideReplicaWrite({
       record,
       stored: prior.record,
       requestName: replicaWriteRequestName({ createOnly })
+    })
+  } else if (requireRegisteredSource) {
+    // A replacement needs no bound: `fromSpace` is a fixed member, so it
+    // already equals the stored registration's. A PUT the request layer took
+    // for a replacement lands here as a create when the registration was
+    // removed meanwhile, and is bounded as one.
+    assertCreateNamesRegisteredSource({
+      record,
+      registered: await listReplicas()
     })
   }
   const validator = await mintValidator({

@@ -115,7 +115,8 @@ describe('did:webvh on the revocation, consent, and listing paths', () => {
         capability: parent,
         invocationTarget: collectionUrl,
         controller: bob.did,
-        allowedActions: ['GET']
+        allowedActions: ['GET'],
+        expires: new Date(parent.expires)
       })
       const before = await readDoc({ zcap: child, signer: bob.signer })
       assert.equal(before.status, 200)

@@ -4,6 +4,27 @@
 
 ### Added
 
+- The replicas routes admit a delegated invocation whose invoked capability
+  targets the Space's replicas URL or a URL beneath it, in place of
+  controller-only: list, register, read, replace, remove and status. That is the
+  `replicas-subtree` container rule; a delegated grant on the Space URL is
+  refused there. The reads keep demanding the auth headers. A create under a
+  delegated invocation, by `POST` or by `PUT` at an absent id, admits only a
+  `fromSpace` a registration on the Space already names, and is otherwise
+  `replica-refused` (409) on `#/fromSpace`. The bound is decided before the
+  source is read and again inside the write's critical section, which the
+  Space's other registration writes and removals cannot enter meanwhile. A
+  delegated `PUT` that would pause the registration mapping the Space's
+  controller is `replica-refused` (409) on `#/pausedAt`. A root invocation
+  carries neither bound. Delete Replica keeps the registration that maps the
+  Space's controller for a delegated caller too.
+- The client-annex clause admits a seventh ladder-signed shape, a maintenance
+  grant on a Space's replicas URL: the target is `/space/<S>/replicas` exactly,
+  the actions lie within `GET`, `HEAD`, `POST`, `PUT` and `DELETE`, the parent
+  is the Space's root, and the delegator's log is a replicated copy rather than
+  one self-hosted here, with no grantee bound and no pointer gate. It is the
+  grant a wallet session holds to maintain the registrations of a promoted
+  replica Space. The client-annex profile stays at `0.1`.
 - The client-annex clause admits a sixth ladder-signed shape, the replica pull.
   A delegation a ladder verification method signs is admitted when its sole
   `controller` is the `serviceEndpoint` of a

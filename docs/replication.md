@@ -50,8 +50,54 @@ ignored.
 
 `GET` there lists the records as `{ url, totalItems, items }`. `GET`, `PUT` and
 `DELETE` of `/space/:spaceId/replicas/:replicaId` read, create or replace, and
-remove one. Every method is controller-only, the reads included, through the
-container rule's `controller-only`.
+remove one, and `GET .../status` reads the pull loop's state.
+
+### Authorization
+
+Every replicas route admits a root invocation by the Space's controller and a
+delegated invocation whose invoked capability targets the Space's replicas URL
+or a URL beneath it. That is the `replicas-subtree` container rule (see
+[client-annex-clause.md](client-annex-clause.md#the-container-rule)). A
+delegated grant on the Space URL, the shape of an app's data grant, reaches the
+routes by attenuation and is refused with the masked `not-found`. Admitted, it
+would list the Space's pull capabilities, pause its loops and remove its
+registrations. The reads demand the auth headers, so an anonymous read is 401
+and no access-control policy serves one. On a promoted replica Space, whose
+controller is an account `did:webvh`, the client-annex clause admits a
+ladder-signed grant on the Space's replicas URL under the Space's root, with no
+pointer gate (see
+[client-annex-clause.md](client-annex-clause.md#shape-7-a-maintenance-grant-on-the-replicas-route)).
+
+The delegated path carries two bounds. The first is on a create. A create under
+a delegated invocation, by `POST` or by `PUT` at an absent id, admits only a
+`fromSpace` that a registration already on the Space names, and is otherwise
+`replica-refused` (409) on `#/fromSpace`. The handler decides it once before the
+source is read, so a refused body costs the source server nothing. The write
+decides it again from the registrations it reads inside its critical section,
+which no other registration write or Delete Replica of the Space can enter
+meanwhile, so a registration removed between the two reads does not satisfy the
+bound. A `PUT` the handler read as a replacement is bounded as a create when the
+registration is gone by the time the write runs. A delegated grant can therefore
+re-register a source the Space has, replace a pull capability in place, resume,
+and remove a registration, and cannot introduce a new source. Without the bound,
+the holder of a grant a phished credential signed could register a server of
+their own as a second source. That source could serve the account DID as
+`controller`, which the controller check compares as a string, and have its
+tombstones applied to the copy. A root create is unbounded. A replacement
+through `PUT` needs no bound, since `fromSpace` cannot change by `PUT`.
+
+The second bound is on a pause. A delegated `PUT` that carries `pausedAt` on the
+one registration mapping a local Space's `did:webvh` controller to a copy of its
+log is `replica-refused` (409) on `#/pausedAt`. A paused copy stops following
+the source, so a key the account withdrew there would stay current here for as
+long as the pause held, and every grant a ladder method of that key set signed
+would stay valid. That is the lockout Delete Replica refuses, in a form that
+leaves the registration in place. The controller's own capability may pause it.
+A resume is never refused.
+
+Delete Replica refuses to remove the one registration that maps the Space's
+controller whoever invokes it (see
+[Guards on Delete Replica and Update Space](#guards-on-delete-replica-and-update-space)).
 
 A registration is a versioned record (see
 [validators-and-stamps.md](validators-and-stamps.md)). Every write mints a write
@@ -130,7 +176,8 @@ stored body leaves the scheduled cycle alone.
 A paused registration still maps a peer-hosted `did:webvh` controller onto the
 local copy of the log, because the index reads every stored registration. The
 DID keeps resolving, and Delete Replica still refuses to remove the one
-registration that maps a controller.
+registration that maps a controller. Under a delegated invocation, pausing that
+registration is refused as well (see [Authorization](#authorization)).
 
 ## Registration checks
 
@@ -219,8 +266,8 @@ controller, and both repairs, a new registration and Update Space, are
 authorized by the controller. The handler scans every stored Space for such a
 controller. The caller changes that Space's controller first. To pause the loop
 or replace the pull capability, the caller `PUT`s the registration instead of
-removing it. A removal that ends a two-Space mapping is allowed. A keystore
-controller is not checked.
+removing it, the pause under the controller's own capability. A removal that
+ends a two-Space mapping is allowed. A keystore controller is not checked.
 
 Delete Space and Delete Collection are refused the same way when they would take
 the only copy a local Space's controller resolves from. Delete Space is not

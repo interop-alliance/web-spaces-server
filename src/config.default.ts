@@ -432,7 +432,7 @@ export const CLIENT_ANNEX_IDENTIFIER = 'https://w3id.org/pws/client-annex'
 /**
  * The version of the client annex profile this server implements, as the
  * service description advertises it (`major.minor`, no patch level). `0.1`
- * claims the clause as this server enforces it, with its six admission
+ * claims the clause as this server enforces it, with its seven admission
  * predicates; a change to what the clause admits is a new version. The entry
  * carries no `url` until the profile text is published.
  */

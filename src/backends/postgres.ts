@@ -5142,16 +5142,19 @@ export class PostgresBackend implements StorageBackend {
   async createReplica({
     spaceId,
     record,
-    pullsChunks
+    pullsChunks,
+    requireRegisteredSource
   }: {
     spaceId: string
     record: ReplicaRegistration
     pullsChunks: boolean
+    requireRegisteredSource?: boolean
   }): Promise<StoredReplica> {
     const { stored } = await this.writeReplica({
       spaceId,
       record,
       pullsChunks,
+      requireRegisteredSource,
       createOnly: true
     })
     return stored
@@ -5159,16 +5162,19 @@ export class PostgresBackend implements StorageBackend {
 
   /**
    * Creates or replaces a registration under its preconditions. The Space
-   * row is locked for the transaction, so Delete Space and the Space's other
-   * registration writes wait, and the stored row is read `FOR UPDATE` and
-   * the write decided against it (`decideReplicaWrite`). A create records
-   * the Space Metadata object's current generation and advances the
-   * object's local segment. A replacement keeps the generation, the
-   * `space_generation` and the loop `state`.
+   * Metadata lock is held for the transaction, so Delete Space and the
+   * Space's other registration writes and deletes wait, and the stored row is
+   * read `FOR UPDATE` and the write decided against it
+   * (`decideReplicaWrite`), the Space's registrations read in the same
+   * transaction when the decision needs them. A create records the Space
+   * Metadata object's current generation and advances the object's local
+   * segment. A replacement keeps the generation, the `space_generation` and
+   * the loop `state`.
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.record {ReplicaRegistration}   the client's shape
    * @param options.pullsChunks {boolean}
+   * @param [options.requireRegisteredSource] {boolean}
    * @param [options.createOnly] {boolean}
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
@@ -5178,6 +5184,7 @@ export class PostgresBackend implements StorageBackend {
     spaceId,
     record,
     pullsChunks,
+    requireRegisteredSource = false,
     createOnly = false,
     ifMatch,
     ifNoneMatch
@@ -5185,6 +5192,7 @@ export class PostgresBackend implements StorageBackend {
     spaceId: string
     record: ReplicaRegistration
     pullsChunks: boolean
+    requireRegisteredSource?: boolean
     createOnly?: boolean
     ifMatch?: string
     ifNoneMatch?: HeldValidators
@@ -5216,6 +5224,14 @@ export class PostgresBackend implements StorageBackend {
         pullsChunks,
         clock: this.#clock,
         currentSpaceGeneration: async () => currentSpaceGeneration,
+        listReplicas: async () => {
+          const { rows } = await client.query<ReplicaRow>(
+            `SELECT ${REPLICA_COLUMNS} FROM replicas WHERE space_id = $1`,
+            [spaceId]
+          )
+          return rows.map(storedReplicaFromRow)
+        },
+        requireRegisteredSource,
         createOnly,
         ifMatch,
         ifNoneMatch

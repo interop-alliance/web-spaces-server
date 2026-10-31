@@ -1775,11 +1775,17 @@ export interface StorageBackend {
    * member changed; a replacement advances nothing on it. The write returns
    * the registration it replaced, if any. `createOnly` refuses a stored
    * registration with `IdConflictError` (409), atomically with the write.
+   * Under `requireRegisteredSource`, the write of a delegated invocation, a
+   * create must name a `fromSpace` another registration on the Space names
+   * (`ReplicaRefusedError`, 409), decided from the registrations read inside
+   * the critical section, which the Space's other registration writes and
+   * removals cannot enter meanwhile.
    */
   writeReplica(options: {
     spaceId: string
     record: ReplicaRegistration
     pullsChunks: boolean
+    requireRegisteredSource?: boolean
     createOnly?: boolean
     ifMatch?: string
     ifNoneMatch?: HeldValidators
@@ -1791,6 +1797,7 @@ export interface StorageBackend {
     spaceId: string
     record: ReplicaRegistration
     pullsChunks: boolean
+    requireRegisteredSource?: boolean
   }): Promise<StoredReplica>
   /**
    * The stored registration, capability included, or `undefined`.

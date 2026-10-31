@@ -127,11 +127,11 @@ importers:
         specifier: ^0.18.0
         version: 0.18.0(@interop/jsonld-signatures@11.9.0)(@interop/storage-core@0.44.0)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
       '@interop/pws-client':
-        specifier: ^0.105.0
-        version: 0.105.0(@interop/jsonld-signatures@11.9.0)
+        specifier: ^0.106.0
+        version: 0.106.0(@interop/jsonld-signatures@11.9.0)
       '@interop/pws-conformance-suite':
         specifier: ^0.36.0
-        version: 0.36.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.105.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
+        version: 0.36.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.106.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
       '@interop/webkms-client':
         specifier: ^15.0.3
         version: 15.0.3
@@ -691,6 +691,10 @@ packages:
 
   '@interop/pws-client@0.105.0':
     resolution: {integrity: sha512-rZpMDvjqzcxSzyseyKnZ90tgQbLLiAjmMagk0n0AVU07ShZKYoOo5UNzuvAAd6RJXx/Uk08PcLB8e5z3aeyPEw==}
+    engines: {node: '>=24.0'}
+
+  '@interop/pws-client@0.106.0':
+    resolution: {integrity: sha512-8ckSXATNb+ojaAxL6X2FPKWhbP+ICWbBGbprWIs5PTyeR3a2z+hf7FjcmAHbenudZGTU0u1t4jmp5R2GOycAQA==}
     engines: {node: '>=24.0'}
 
   '@interop/pws-conformance-suite@0.36.0':
@@ -3533,7 +3537,28 @@ snapshots:
       - expo-crypto
       - react-native-get-random-values
 
-  '@interop/pws-conformance-suite@0.36.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.105.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))':
+  '@interop/pws-client@0.106.0(@interop/jsonld-signatures@11.9.0)':
+    dependencies:
+      '@interop/capability-agent': 0.2.2
+      '@interop/data-integrity-core': 8.9.0
+      '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
+      '@interop/edv-client': 17.9.5
+      '@interop/ezcap': 7.5.4
+      '@interop/http-client': 1.0.5
+      '@interop/minimal-cipher': 7.11.1
+      '@interop/storage-core': 0.44.0
+      '@interop/vh-resource-log': 0.11.0(@interop/storage-core@0.44.0)
+      '@interop/x25519-key-agreement-key': 5.4.3
+      '@interop/zcap': 11.4.0
+      '@noble/hashes': 2.4.0
+      '@scure/base': 2.4.0
+      json-canonicalize: 3.0.0
+    transitivePeerDependencies:
+      - '@interop/jsonld-signatures'
+      - expo-crypto
+      - react-native-get-random-values
+
+  '@interop/pws-conformance-suite@0.36.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.106.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))':
     dependencies:
       '@digitalcredentials/bnid': 5.0.0(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
       '@interop/data-integrity-core': 8.9.0
@@ -3542,7 +3567,7 @@ snapshots:
       '@interop/ezcap': 7.5.4
       '@interop/http-digest-header': 3.2.0
       '@interop/http-signature-zcap-invoke': 6.3.0
-      '@interop/pws-client': 0.105.0(@interop/jsonld-signatures@11.9.0)
+      '@interop/pws-client': 0.106.0(@interop/jsonld-signatures@11.9.0)
       '@interop/x25519-key-agreement-key': 5.4.3
       assert: 2.1.0
       uuid: 14.0.3

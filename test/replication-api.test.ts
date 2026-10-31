@@ -235,8 +235,7 @@ describe('Replication between two servers', () => {
       assert.equal(again.json().type, ProblemTypes.ID_CONFLICT)
     })
 
-    it('is controller-only, the reads included', async () => {
-      // No auth headers at all.
+    it('demands the auth headers on every read', async () => {
       for (const path of [
         '/space/reg-dst/replicas',
         '/space/reg-dst/replicas/peer',
@@ -245,7 +244,13 @@ describe('Replication between two servers', () => {
         const anonymous = await replica.fastify.inject({ url: path })
         assert.equal(anonymous.statusCode, 401, path)
       }
-      // A delegated capability over the whole Space, every verb.
+    })
+
+    it('refuses a delegated grant on the Space URL, the shape of a data grant', async () => {
+      // A delegated capability over the whole Space, every verb, reaches the
+      // replicas routes by attenuation, and the container rule keeps it out:
+      // it would list the pull capabilities, pause the loops and remove the
+      // registrations.
       const spaceUrl = 'https://replica.example/space/reg-dst/'
       const grant = await delegate({
         signer: alice.signer,
@@ -270,6 +275,90 @@ describe('Replication between two servers', () => {
         assert.equal(delegated.statusCode, 404, `${method} ${path}`)
         assert.equal(delegated.json().type, ProblemTypes.NOT_FOUND)
       }
+    })
+
+    it('admits a delegated grant on the replicas URL, bounding a create to a registered source', async () => {
+      const spaceUrl = 'https://replica.example/space/reg-dst/'
+      const grant = await delegate({
+        signer: alice.signer,
+        capability: `urn:zcap:root:${encodeURIComponent(spaceUrl)}`,
+        invocationTarget: `${spaceUrl}replicas`,
+        controller: bob.did,
+        allowedActions: ['GET', 'POST', 'PUT', 'DELETE']
+      })
+      const asBob = (
+        request: Omit<Parameters<typeof call>[0], 'server' | 'signer'>
+      ) =>
+        call({
+          server: replica,
+          signer: bob.signer,
+          capability: grant,
+          ...request
+        })
+      for (const path of [
+        '/space/reg-dst/replicas',
+        '/space/reg-dst/replicas/peer',
+        '/space/reg-dst/replicas/peer/status'
+      ]) {
+        const read = await asBob({ path })
+        assert.equal(read.statusCode, 200, `${path}: ${read.payload}`)
+      }
+
+      // A create may name only a source a registration on the Space already
+      // names: `reg-src` is registered as `peer`, `reg-other` is not, though
+      // it exists and its pull capability would pass the peer checks.
+      await createPeerSpace({
+        server: source,
+        spaceId: 'reg-other',
+        controller: alice.did
+      })
+      const pullCapabilityFor = async (fromSpace: string) =>
+        delegate({
+          signer: alice.signer,
+          capability: `urn:zcap:root:${encodeURIComponent(fromSpace)}`,
+          invocationTarget: fromSpace,
+          controller: replica.did,
+          allowedActions: ['GET']
+        })
+      const registration = async (id: string, fromSpace: string) => ({
+        id,
+        fromSpace,
+        toSpace: spaceUrl,
+        capability: await pullCapabilityFor(fromSpace),
+        role: 'source'
+      })
+      const newSource = 'https://source.example/space/reg-other/'
+      const refusedPost = await asBob({
+        path: '/space/reg-dst/replicas',
+        method: 'POST',
+        json: await registration('other', newSource)
+      })
+      assert.equal(refusedPost.statusCode, 409, refusedPost.payload)
+      assert.equal(refusedPost.json().type, ProblemTypes.REPLICA_REFUSED)
+      assert.equal(refusedPost.json().errors[0].pointer, '#/fromSpace')
+      // A PUT at an absent id is a create, and carries the same bound.
+      const refusedPut = await asBob({
+        path: '/space/reg-dst/replicas/other',
+        method: 'PUT',
+        json: await registration('other', newSource)
+      })
+      assert.equal(refusedPut.statusCode, 409, refusedPut.payload)
+      assert.equal(refusedPut.json().type, ProblemTypes.REPLICA_REFUSED)
+
+      const again = await asBob({
+        path: '/space/reg-dst/replicas',
+        method: 'POST',
+        json: await registration(
+          'again',
+          'https://source.example/space/reg-src/'
+        )
+      })
+      assert.equal(again.statusCode, 201, again.payload)
+      const removed = await asBob({
+        path: '/space/reg-dst/replicas/again',
+        method: 'DELETE'
+      })
+      assert.equal(removed.statusCode, 204, removed.payload)
     })
 
     it('refuses a malformed body as invalid-request-body', async () => {
@@ -907,7 +996,7 @@ describe('Replication between two servers', () => {
       )
     })
 
-    it('is controller-only', async () => {
+    it("refuses a root invocation signed by a key other than the controller's", async () => {
       const before = (await read()).json()
       const asBob = await call({
         server: replica,

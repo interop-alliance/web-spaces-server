@@ -268,6 +268,13 @@ export function registeredBackendPath({
 }
 
 /**
+ * The reserved segment beneath a Space URL that addresses its replica
+ * registrations. Exported for a reader that holds the Space's canonical URL
+ * and no Space id (the container rule).
+ */
+export const REPLICAS_SEGMENT = 'replicas'
+
+/**
  * `/space/:spaceId/replicas` -- the Space's replica registrations: `GET`
  * lists them and `POST` adds one.
  * @param options {object}
@@ -275,7 +282,7 @@ export function registeredBackendPath({
  * @returns {string}
  */
 export function replicasPath({ spaceId }: { spaceId: string }): string {
-  return `${spaceBase({ spaceId })}/replicas`
+  return `${spaceBase({ spaceId })}/${REPLICAS_SEGMENT}`
 }
 
 /**

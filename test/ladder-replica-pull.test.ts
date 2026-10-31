@@ -1,7 +1,10 @@
 /**
- * The replica-pull shape of the client-annex clause (Vitest): a ladder-signed
- * pull capability is admitted on the source server only while the client-annex
- * document names the replica server through a `ReplicaServer` pointer.
+ * The two replica shapes of the client-annex clause (Vitest). On the source
+ * server, a ladder-signed pull capability is admitted only while the
+ * client-annex document names the replica server through a `ReplicaServer`
+ * pointer. On the replica server, a ladder-signed maintenance grant on a
+ * promoted replica Space's replicas URL is admitted with no pointer, and the
+ * route bounds a delegated create to a source the Space already registers.
  *
  * Two servers are booted in one process and never listen, as in
  * `replicated-webvh-controller.test.ts`. `https://origin.example` hosts a
@@ -845,6 +848,357 @@ describe('the client-annex clause admits a ladder-signed replica pull under a po
       })
       await repointToUnpointedAnnexGeneration(acct)
       assertRefusedAtSource(await registerAccountSpace(acct))
+    })
+  })
+
+  describe('a ladder-signed maintenance grant on a promoted replica Space', () => {
+    // The mirror holds a copy of the account Space, promoted to the account
+    // DID, which resolves there through the registration's mapping. The
+    // account holds no key that can root-invoke on the mirror, so a session
+    // maintains the registrations under a grant the ladder signs to the
+    // session's bare did:key, on the Space's replicas URL.
+    const spaceId = 'maint-copy'
+    let spaceUrl: string
+    let acct: Account
+    let session: DidKey
+    let grant: object
+    /**
+     * A second Space on the origin under the account DID: a source the
+     * controller may add and a delegated grant may not.
+     */
+    let extraSpaceUrl: string
+
+    /**
+     * Sends one request on the mirror as the session, under the grant.
+     */
+    async function asSession({
+      path,
+      method: verb = 'GET',
+      json,
+      capability = grant
+    }: {
+      path: string
+      method?: string
+      json?: object
+      capability?: object
+    }) {
+      return call({
+        server: mirror,
+        path,
+        method: verb,
+        json,
+        capability,
+        signer: session.signer
+      })
+    }
+
+    /**
+     * A registration body naming `fromSpace` as a source of the mirror's
+     * Space, under a pull capability `delegator` signs to the mirror.
+     */
+    async function registration({
+      id,
+      fromSpace,
+      delegator
+    }: {
+      id: string
+      fromSpace: string
+      delegator: any
+    }) {
+      return {
+        id,
+        fromSpace,
+        toSpace: spaceUrl,
+        capability: await delegate({
+          signer: delegator,
+          capability: rootCapabilityId(fromSpace),
+          invocationTarget: fromSpace,
+          controller: mirror.did,
+          allowedActions: ['GET']
+        }),
+        role: 'source'
+      }
+    }
+
+    /**
+     * A ladder-signed grant to the session from the mirror Space's root, on
+     * the replicas URL with every verb unless an option says otherwise.
+     */
+    async function maintenanceGrant({
+      invocationTarget = `${spaceUrl}replicas`,
+      allowedActions = ['GET', 'POST', 'PUT', 'DELETE'],
+      parent = rootCapabilityId(spaceUrl)
+    }: {
+      invocationTarget?: string
+      allowedActions?: string[]
+      parent?: string | { id: string }
+    } = {}) {
+      return signDelegation({
+        signer: acct.account.ladder.signer(),
+        parent,
+        controller: session.did,
+        invocationTarget,
+        allowedActions
+      })
+    }
+
+    beforeAll(async () => {
+      spaceUrl = `${mirror.serverUrl}/space/${spaceId}/`
+      acct = await provisionAccount({ name: 'maint', pointers: [mirror.did] })
+      const bootstrap = bareDidKeyOf(await Ed25519VerificationKey.generate())
+      await createPeerSpace({
+        server: mirror,
+        spaceId,
+        controller: bootstrap.did
+      })
+      const registered = await postRegistration({
+        toSpaceId: spaceId,
+        fromSpace: acct.spaceUrl,
+        delegator: acct.account.ladder.signer(),
+        signer: bootstrap.signer
+      })
+      assert.equal(registered.statusCode, 201, registered.payload)
+      await pull(spaceId)
+      const promoted = await call({
+        server: mirror,
+        path: `/space/${spaceId}/meta`,
+        method: 'PUT',
+        json: { name: spaceId, controller: acct.account.did },
+        signer: bootstrap.signer
+      })
+      assert.equal(promoted.statusCode, 204, promoted.payload)
+
+      await createPeerSpace({
+        server: origin,
+        spaceId: 'maint-extra',
+        controller: alice.did
+      })
+      await promote('maint-extra', acct.account.did)
+      extraSpaceUrl = `${origin.serverUrl}/space/maint-extra/`
+
+      session = bareDidKeyOf(await Ed25519VerificationKey.generate())
+      grant = await maintenanceGrant()
+    })
+
+    it('lists the registrations, and reads one and its status (200)', async () => {
+      const listed = await asSession({ path: `/space/${spaceId}/replicas` })
+      assert.equal(listed.statusCode, 200, listed.payload)
+      assert.equal(listed.json().totalItems, 1)
+      const read = await asSession({
+        path: `/space/${spaceId}/replicas/origin`
+      })
+      assert.equal(read.statusCode, 200, read.payload)
+      assert.equal(read.json().fromSpace, acct.spaceUrl)
+      const status = await asSession({
+        path: `/space/${spaceId}/replicas/origin/status`
+      })
+      assert.equal(status.statusCode, 200, status.payload)
+      assert.equal(status.json().state, 'idle')
+    })
+
+    it('re-registers the source the Space already has (201)', async () => {
+      const again = await asSession({
+        path: `/space/${spaceId}/replicas`,
+        method: 'POST',
+        json: await registration({
+          id: 'origin-again',
+          fromSpace: acct.spaceUrl,
+          delegator: acct.account.ladder.signer()
+        })
+      })
+      assert.equal(again.statusCode, 201, again.payload)
+    })
+
+    it('refuses a create naming a source the Space does not register (409), by POST and by PUT', async () => {
+      // The pull capability is signed by an enrolled client key, so nothing
+      // but the route's bound stands between this body and a registration.
+      const body = await registration({
+        id: 'extra',
+        fromSpace: extraSpaceUrl,
+        delegator: acct.account.client.signer()
+      })
+      for (const [verb, path] of [
+        ['POST', `/space/${spaceId}/replicas`],
+        ['PUT', `/space/${spaceId}/replicas/extra`]
+      ] as const) {
+        const refused = await asSession({ path, method: verb, json: body })
+        assert.equal(refused.statusCode, 409, `${verb}: ${refused.payload}`)
+        assert.equal(refused.json().type, ProblemTypes.REPLICA_REFUSED)
+        assert.equal(refused.json().errors[0].pointer, '#/fromSpace')
+      }
+      const listed = await asSession({ path: `/space/${spaceId}/replicas` })
+      assert.equal(listed.json().totalItems, 2)
+    })
+
+    it("admits that source under the controller's root invocation, after which the grant maintains it", async () => {
+      // The account's enrolled client key root-invokes on the mirror, where
+      // the account DID resolves from the copy the registration maps.
+      const body = await registration({
+        id: 'extra',
+        fromSpace: extraSpaceUrl,
+        delegator: acct.account.client.signer()
+      })
+      const created = await call({
+        server: mirror,
+        path: `/space/${spaceId}/replicas`,
+        method: 'POST',
+        json: body,
+        signer: acct.account.client.signer()
+      })
+      assert.equal(created.statusCode, 201, created.payload)
+      const paused = await asSession({
+        path: `/space/${spaceId}/replicas/extra`,
+        method: 'PUT',
+        json: { ...created.json(), pausedAt: 'now' }
+      })
+      assert.equal(paused.statusCode, 204, paused.payload)
+    })
+
+    it('pauses a registration the Space can spare through PUT (204), and its status reads paused', async () => {
+      const read = await asSession({
+        path: `/space/${spaceId}/replicas/origin-again`
+      })
+      const paused = await asSession({
+        path: `/space/${spaceId}/replicas/origin-again`,
+        method: 'PUT',
+        json: { ...read.json(), pausedAt: 'now' }
+      })
+      assert.equal(paused.statusCode, 204, paused.payload)
+      const status = await asSession({
+        path: `/space/${spaceId}/replicas/origin-again/status`
+      })
+      assert.equal(status.json().state, 'paused')
+    })
+
+    it('removes a registration the Space can spare (204)', async () => {
+      for (const replicaId of ['origin-again', 'extra']) {
+        const removed = await asSession({
+          path: `/space/${spaceId}/replicas/${replicaId}`,
+          method: 'DELETE'
+        })
+        assert.equal(removed.statusCode, 204, removed.payload)
+      }
+    })
+
+    it("keeps the registration that maps the Space's controller (409)", async () => {
+      const refused = await asSession({
+        path: `/space/${spaceId}/replicas/origin`,
+        method: 'DELETE'
+      })
+      assert.equal(refused.statusCode, 409, refused.payload)
+      assert.equal(refused.json().type, ProblemTypes.REPLICA_REFUSED)
+      const listed = await asSession({ path: `/space/${spaceId}/replicas` })
+      assert.equal(listed.json().totalItems, 1)
+    })
+
+    it("refuses to pause the registration that maps the Space's controller (409), and resumes it", async () => {
+      // Once `origin` is the one registration mapping the controller, a
+      // paused copy of its log would keep a withdrawn key current here. The
+      // controller's own key may pause it; the grant may not.
+      const read = await asSession({
+        path: `/space/${spaceId}/replicas/origin`
+      })
+      const refused = await asSession({
+        path: `/space/${spaceId}/replicas/origin`,
+        method: 'PUT',
+        json: { ...read.json(), pausedAt: 'now' }
+      })
+      assert.equal(refused.statusCode, 409, refused.payload)
+      assert.equal(refused.json().type, ProblemTypes.REPLICA_REFUSED)
+      assert.equal(refused.json().errors[0].pointer, '#/pausedAt')
+      const byController = await call({
+        server: mirror,
+        path: `/space/${spaceId}/replicas/origin`,
+        method: 'PUT',
+        json: { ...read.json(), pausedAt: 'now' },
+        signer: acct.account.client.signer()
+      })
+      assert.equal(byController.statusCode, 204, byController.payload)
+      const resumed = await asSession({
+        path: `/space/${spaceId}/replicas/origin`,
+        method: 'PUT',
+        json: read.json()
+      })
+      assert.equal(resumed.statusCode, 204, resumed.payload)
+      const status = await asSession({
+        path: `/space/${spaceId}/replicas/origin/status`
+      })
+      assert.notEqual(status.json().state, 'paused')
+    })
+
+    describe('the shape', () => {
+      it('refuses a target beneath the replicas URL (404)', async () => {
+        const refused = await asSession({
+          path: `/space/${spaceId}/replicas/origin`,
+          capability: await maintenanceGrant({
+            invocationTarget: `${spaceUrl}replicas/origin`
+          })
+        })
+        assert.equal(refused.statusCode, 404, refused.payload)
+      })
+
+      it('refuses the whole-Space target (404)', async () => {
+        const refused = await asSession({
+          path: `/space/${spaceId}/replicas`,
+          capability: await maintenanceGrant({ invocationTarget: spaceUrl })
+        })
+        assert.equal(refused.statusCode, 404, refused.payload)
+      })
+
+      it('admits HEAD, which every GET route answers (200)', async () => {
+        const read = await asSession({
+          path: `/space/${spaceId}/replicas`,
+          method: 'HEAD',
+          capability: await maintenanceGrant({
+            allowedActions: ['GET', 'HEAD']
+          })
+        })
+        assert.equal(read.statusCode, 200, read.payload)
+      })
+
+      it('refuses a set carrying a verb the routes do not serve (404)', async () => {
+        const refused = await asSession({
+          path: `/space/${spaceId}/replicas`,
+          capability: await maintenanceGrant({
+            allowedActions: ['GET', 'PATCH']
+          })
+        })
+        assert.equal(refused.statusCode, 404, refused.payload)
+      })
+
+      it("refuses the shape where the account's log is self-hosted (404)", async () => {
+        // On the origin the account Space holds the log of record, so the
+        // shape would hand the session that Space's registrations with no
+        // record anywhere. The same grant, on the mirror, is admitted.
+        const refused = await call({
+          server: origin,
+          path: `/space/${acct.name}/replicas`,
+          capability: await signDelegation({
+            signer: acct.account.ladder.signer(),
+            parent: rootCapabilityId(acct.spaceUrl),
+            controller: session.did,
+            invocationTarget: `${acct.spaceUrl}replicas`,
+            allowedActions: ['GET', 'POST', 'PUT', 'DELETE']
+          }),
+          signer: session.signer
+        })
+        assert.equal(refused.statusCode, 404, refused.payload)
+      })
+
+      it('refuses a parent other than the Space root (404)', async () => {
+        const management = await delegate({
+          signer: acct.account.client.signer(),
+          capability: rootCapabilityId(spaceUrl),
+          invocationTarget: spaceUrl,
+          controller: acct.account.did,
+          allowedActions: ['GET', 'POST', 'PUT', 'DELETE']
+        })
+        const refused = await asSession({
+          path: `/space/${spaceId}/replicas`,
+          capability: await maintenanceGrant({ parent: management })
+        })
+        assert.equal(refused.statusCode, 404, refused.payload)
+      })
     })
   })
 })

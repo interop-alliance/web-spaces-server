@@ -12,15 +12,32 @@
  * pauses and resumes the pull loop, and replaces the pull capability in
  * place, the registration keeping its id, its loop and its checkpoint.
  *
- * Every method is controller-only, the reads included: the record holds the
- * pull capability, and the container rule's `controller-only` refuses any
- * delegated invocation. A registration names one source peer. Data flows
- * from `fromSpace` to `toSpace`, this Space, and nothing flows back without a
- * registration on the peer's side.
+ * Every method, the reads included, admits a root invocation by the Space's
+ * controller and a delegated invocation whose invoked capability targets the
+ * Space's replicas URL or a URL beneath it, the `replicas-subtree` container
+ * rule (`lib/containerRule.ts`). A grant on the Space URL, an app's data
+ * grant, is refused: it would reach these routes by attenuation and list the
+ * pull capabilities, pause the loops and remove the registrations. The reads
+ * keep demanding the auth headers. The delegated path carries two bounds. A
+ * create, by POST or by PUT at an absent id, admits only a `fromSpace` a
+ * registration already on the Space names (`lib/replicaRecord.ts`), decided
+ * once here before the peer is read and again inside the write's critical
+ * section, so a delegated grant can re-register a source the Space has and
+ * cannot introduce a new one. A pause of the registration that maps the
+ * Space's controller is refused, since a paused copy of the controller's log
+ * never learns of a key the account withdrew, and a delegated grant is what a
+ * withdrawn key would have signed. A root invocation carries neither bound.
+ * Delete Replica keeps the registration that maps the Space's controller,
+ * whoever invokes it. The delegated path exists because a promoted replica
+ * Space, whose controller is an account did:webvh, must be maintained by a
+ * session holding no key that document lists under `capabilityInvocation`. A
+ * registration names one source peer. Data flows from `fromSpace` to
+ * `toSpace`, this Space, and nothing flows back without a registration on
+ * the peer's side.
  */
 import { isDeepStrictEqual } from 'node:util'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-
+import type { ReplicaRegistration } from '@interop/storage-core'
 import {
   InvalidRequestBodyError,
   ReplicaNotFoundError,
@@ -29,6 +46,7 @@ import {
 import { formatEtag, parseWritePreconditions } from '../lib/etag.js'
 import { assertReplicaWritePrecondition } from '../lib/preconditions.js'
 import {
+  assertCreateNamesRegisteredSource,
   assertReplacementKeepsFixedMembers,
   replicaValidator
 } from '../lib/replicaRecord.js'
@@ -48,7 +66,7 @@ import {
   assertReplicaAcceptable,
   parseReplicaRegistration
 } from '../sync/registration.js'
-import type { ReplicaListing, StoredReplica } from '../types.js'
+import type { ReplicaListing, StorageBackend, StoredReplica } from '../types.js'
 import { fetchSpaceAndVerify } from './spaceContext.js'
 
 /**
@@ -61,13 +79,105 @@ function replicaEtag(stored: StoredReplica): string {
   return formatEtag(replicaValidator(stored))
 }
 
+/**
+ * The container rule every replicas route carries: a delegated invocation
+ * passes only when the invoked capability targets the Space's replicas URL
+ * or a URL beneath it.
+ */
+const containerRule = 'replicas-subtree'
+
+/**
+ * The bound on a create under a delegated invocation, decided here before
+ * the peer is read so a refused body costs the source server nothing, and
+ * again by the write under its lock, where it holds. A root invocation
+ * carries no bound.
+ * @param options {object}
+ * @param options.storage {StorageBackend}
+ * @param options.spaceId {string}
+ * @param options.record {ReplicaRegistration}
+ * @param options.rootInvocation {boolean}
+ * @returns {Promise<void>}
+ * @throws {ReplicaRefusedError}
+ */
+async function assertDelegatedCreateNamesRegisteredSource({
+  storage,
+  spaceId,
+  record,
+  rootInvocation
+}: {
+  storage: StorageBackend
+  spaceId: string
+  record: ReplicaRegistration
+  rootInvocation: boolean
+}): Promise<void> {
+  if (rootInvocation) {
+    return
+  }
+  assertCreateNamesRegisteredSource({
+    record,
+    registered: await storage.listReplicas({ spaceId })
+  })
+}
+
+/**
+ * Refuses a write that would pause the one registration mapping a Space's
+ * `did:webvh` controller to a local copy of its log, under a delegated
+ * invocation. A paused copy stops following the source, so a key the account
+ * withdrew there stays current here for as long as the pause holds, and a
+ * ladder method it signed keeps every grant it signed valid. That is the
+ * removal Delete Replica refuses, in a form that leaves the registration in
+ * place. A root invocation may pause it: the controller's own key decides.
+ * A body that keeps the registration paused is refused too, since the
+ * pause it repeats was the controller's. A resume is never refused.
+ * @param options {object}
+ * @param options.storage {StorageBackend}
+ * @param options.serverUrl {string}
+ * @param options.spaceId {string}
+ * @param options.replicaId {string}
+ * @returns {Promise<void>}
+ * @throws {ReplicaRefusedError}
+ */
+async function assertDelegatedPauseKeepsControllers({
+  storage,
+  serverUrl,
+  spaceId,
+  replicaId
+}: {
+  storage: StorageBackend
+  serverUrl: string
+  spaceId: string
+  replicaId: string
+}): Promise<void> {
+  const unmapped = await controllerUnmappedByRemoval({
+    storage,
+    serverUrl,
+    spaceId,
+    replicaId
+  })
+  if (unmapped === undefined) {
+    return
+  }
+  throw new ReplicaRefusedError({
+    title: 'The replica registration cannot be paused.',
+    pointer: '#/pausedAt',
+    detail:
+      `Space "${unmapped.spaceId}" is controlled by "${unmapped.did}", ` +
+      'which resolves only from the log this registration replicates, and ' +
+      'a paused copy would stop following that log. Pausing it takes the ' +
+      "Space controller's own capability."
+  })
+}
+
 export class ReplicaRequest {
   /**
    * POST /space/:spaceId/replicas
-   * Registers a source peer. The body is checked, then the peer is read
-   * (`sync/registration.ts`), and only then is the record stored and its
-   * pull loop started. Responds 201 with the record, its `ETag`, and a
-   * `Location`. A duplicate id is `id-conflict` (409).
+   * Registers a source peer. The body is checked, a delegated invocation's
+   * `fromSpace` is checked against the registrations the Space already holds
+   * (`replica-refused`, 409, when none names it), then the peer is read
+   * (`sync/registration.ts`), and only then is the record stored, under the
+   * same bound decided again inside the write, and its pull loop started.
+   * Responds 201 with the record, its `ETag`, and a `Location`. A duplicate
+   * id is `id-conflict` (409).
    * @param request {import('fastify').FastifyRequest}
    * @param reply {import('fastify').FastifyReply}
    * @returns {Promise<FastifyReply>}
@@ -86,20 +196,26 @@ export class ReplicaRequest {
     // Reject path-traversal / non-URL-safe ids before any storage access.
     assertValidIds({ spaceId }, { requestName })
 
-    // Verify (controller-only) before the body is judged, so its 400s tell
-    // an unauthorized caller nothing.
-    const { spaceMetadata } = await fetchSpaceAndVerify({
+    // Verify before the body is judged, so its 400s tell an unauthorized
+    // caller nothing.
+    const { spaceMetadata, rootInvocation } = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: replicasPath({ spaceId }),
       requestName,
-      containerRule: 'controller-only'
+      containerRule
     })
     const record = parseReplicaRegistration({
       body,
       serverUrl,
       spaceId,
       requestName
+    })
+    await assertDelegatedCreateNamesRegisteredSource({
+      storage,
+      spaceId,
+      record,
+      rootInvocation
     })
     const { pullsChunks } = await assertReplicaAcceptable({
       record,
@@ -113,7 +229,12 @@ export class ReplicaRequest {
       logger: request.log
     })
 
-    const stored = await storage.createReplica({ spaceId, record, pullsChunks })
+    const stored = await storage.createReplica({
+      spaceId,
+      record,
+      pullsChunks,
+      requireRegisteredSource: !rootInvocation
+    })
     // The Space Metadata object lists the registration under `replicas` and
     // its validator advanced with it, so the cached object is stale. The
     // registration may map a peer-hosted did:webvh onto this Space's copy.
@@ -143,14 +264,17 @@ export class ReplicaRequest {
    * carries `pausedAt` pauses the pull loop, one that omits it resumes; the
    * stored value is the server's own time. A capability that differs from
    * the stored one passes the peer checks a POST's does; one that does not
-   * is not re-read. The loop reacts at once to a pause, a resume, a new
-   * capability or a create, and a repeat of the stored body leaves its
-   * schedule alone. The body is judged against the stored registration
-   * inside the write's critical section. `If-Match`
-   * and `If-None-Match: *` are evaluated by the backend atomically with the
-   * write (412). Responds 201 with the record and a `Location` when the
-   * registration did not exist, else 204, both under the new `ETag`. The
-   * registration keeps its id, its loop and its checkpoint.
+   * is not re-read. A create under a delegated invocation carries POST's
+   * `fromSpace` bound, and a delegated pause of the registration that maps
+   * the Space's controller is `replica-refused` (409) on `#/pausedAt`. The
+   * loop reacts at once to a pause, a resume, a new capability or a create,
+   * and a repeat of the stored body leaves its schedule alone. The body is
+   * judged against the stored registration inside the write's critical
+   * section, the create bound with it. `If-Match` and `If-None-Match: *` are
+   * evaluated by the backend atomically with the write (412). Responds 201
+   * with the record and a `Location` when the registration did not exist,
+   * else 204, both under the new `ETag`. The registration keeps its id, its
+   * loop and its checkpoint.
    * @param request {import('fastify').FastifyRequest}
    * @param reply {import('fastify').FastifyReply}
    * @returns {Promise<FastifyReply>}
@@ -170,14 +294,14 @@ export class ReplicaRequest {
     const requestName = 'Update Replica'
 
     assertValidIds({ spaceId }, { requestName })
-    // Verify (controller-only) before the body is judged, so its 400s tell
-    // an unauthorized caller nothing.
-    const { spaceMetadata } = await fetchSpaceAndVerify({
+    // Verify before the body is judged, so its 400s tell an unauthorized
+    // caller nothing.
+    const { spaceMetadata, rootInvocation } = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: replicaPath({ spaceId, replicaId }),
       requestName,
-      containerRule: 'controller-only'
+      containerRule
     })
     const record = parseReplicaRegistration({
       body,
@@ -218,6 +342,28 @@ export class ReplicaRequest {
         stored: prior.record,
         requestName
       })
+      // The pause guard reads the replica index and the Space listing, so it
+      // runs after the cheap checks above and only against a stored
+      // registration, the one thing a pause can hold.
+      if (!rootInvocation && record.pausedAt !== undefined) {
+        await assertDelegatedPauseKeepsControllers({
+          storage,
+          serverUrl,
+          spaceId,
+          replicaId
+        })
+      }
+    } else {
+      // A PUT at an absent id is a create, and carries the delegated path's
+      // bound as POST does. A replacement needs none, `fromSpace` being a
+      // fixed member. The write decides both again under its lock, and
+      // bounds as a create a PUT whose registration was removed meanwhile.
+      await assertDelegatedCreateNamesRegisteredSource({
+        storage,
+        spaceId,
+        record,
+        rootInvocation
+      })
     }
     // Under an unchanged capability the stored value stands, checked when
     // that capability was stored; the write keeps it when the capability it
@@ -243,6 +389,7 @@ export class ReplicaRequest {
       spaceId,
       record,
       pullsChunks,
+      requireRegisteredSource: !rootInvocation,
       ...preconditions
     })
     const created = replaced === undefined
@@ -301,7 +448,7 @@ export class ReplicaRequest {
       spaceId,
       targetPath: replicasPath({ spaceId }),
       requestName,
-      containerRule: 'controller-only'
+      containerRule
     })
 
     const replicas = await storage.listReplicas({ spaceId })
@@ -337,7 +484,7 @@ export class ReplicaRequest {
       spaceId,
       targetPath: replicaPath({ spaceId, replicaId }),
       requestName,
-      containerRule: 'controller-only'
+      containerRule
     })
 
     // An id no registration can carry names none, and never reaches storage.
@@ -358,7 +505,7 @@ export class ReplicaRequest {
    * Nothing already pulled is removed. Idempotent: 204 whether or not a
    * registration was stored. Refused with `replica-refused` (409) while the
    * registration is the only one that maps a Space's `did:webvh` controller
-   * to a local copy of its log.
+   * to a local copy of its log, for a delegated caller as for the controller.
    * @param request {import('fastify').FastifyRequest}
    * @param reply {import('fastify').FastifyReply}
    * @returns {Promise<FastifyReply>}
@@ -381,7 +528,7 @@ export class ReplicaRequest {
       spaceId,
       targetPath: replicaPath({ spaceId, replicaId }),
       requestName,
-      containerRule: 'controller-only'
+      containerRule
     })
 
     // An id no registration can carry names none, and never reaches storage.
@@ -462,7 +609,7 @@ export class ReplicaRequest {
       spaceId,
       targetPath: replicaStatusPath({ spaceId, replicaId }),
       requestName,
-      containerRule: 'controller-only'
+      containerRule
     })
 
     // An id no registration can carry names none, and never reaches storage.

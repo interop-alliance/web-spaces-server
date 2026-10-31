@@ -178,14 +178,21 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   [docs/webvh-controllers.md](docs/webvh-controllers.md).
 - **`src/sync/`**, **`src/lib/replicaApply.ts`**, **`src/lib/syncIdentity.ts`**,
   **`src/lib/webvhLogLocation.ts`** -- the replication facet. A replica
-  registration (`POST /space/:spaceId/replicas`, controller-only) is one source
-  peer of a Space, with the pull capability the controller delegated to this
-  server's DID. The controller check (`sync/registration.ts`) admits it in one
-  of three branches: the source controller equals the local one; the source
-  controller is a `did:webvh` hosted in the source Space whose document lists
-  the local `did:key` under `capabilityInvocation`; or, the bootstrap branch,
-  the local controller is a `did:key` the document need not list and the
-  capability is a one-link delegation from the source's root whose proof a
+  registration (`POST /space/:spaceId/replicas`) is one source peer of a Space,
+  with the pull capability the controller delegated to this server's DID. Every
+  replicas route admits the controller's root invocation and a delegated
+  invocation whose invoked capability targets the Space's replicas URL or a URL
+  beneath it (the `replicas-subtree` container rule), the reads under the auth
+  headers. A delegated create (POST, or PUT at an absent id) admits only a
+  `fromSpace` a registration already on the Space names, decided inside the
+  write's critical section, and a delegated pause of the registration that maps
+  the Space's controller is refused; a root invocation carries neither bound.
+  The controller check (`sync/registration.ts`) admits it in one of three
+  branches: the source controller equals the local one; the source controller is
+  a `did:webvh` hosted in the source Space whose document lists the local
+  `did:key` under `capabilityInvocation`; or, the bootstrap branch, the local
+  controller is a `did:key` the document need not list and the capability is a
+  one-link delegation from the source's root whose proof a
   `capabilityDelegation` method of that document signs. The document comes from
   the log read through the capability when the DID is hosted in the source
   Space, else from the copy another registration here maps, which is how an
@@ -537,9 +544,9 @@ passes through composed inspectors. The revocation inspector
 (`lib/revocations.ts`) fails a chain containing any capability with a stored
 revocation. The annex-chain inspector (`lib/clientAnnexClause.ts`) bounds what a
 ladder verification method (a `capabilityDelegation`-only method of a
-self-hosted `did:webvh` document) may delegate, to six admitted shapes, and adds
-two invocation-time bounds on `PUT` at a Space Metadata URL and `DELETE` at a
-canonical Space URL. The service description's client-annex entry claims the
+self-hosted `did:webvh` document) may delegate, to seven admitted shapes, and
+adds two invocation-time bounds on `PUT` at a Space Metadata URL and `DELETE` at
+a canonical Space URL. The service description's client-annex entry claims the
 clause, and a change to what it admits is a new version of that entry. Full
 rules in [docs/client-annex-clause.md](docs/client-annex-clause.md).
 
@@ -551,10 +558,12 @@ Update Keystore refuse every delegated invocation, decided off the
 `Capability-Invocation` header before any chain is read. `DELETE /space/<S>/`
 also accepts a tail targeting exactly that Space URL with `allowedAction`
 exactly `['DELETE']`, and `PUT /space/<S>/<C>/meta/log` one targeting exactly
-the Space's items subtree. `PUT /space/<S>/<C>/meta` and Create Collection carry
-no rule. The rule reads the tail alone; the client-annex clause's two bounds
-cover the chains it admits. A refusal surfaces as the masked `not-found`. Full
-rules in [docs/client-annex-clause.md](docs/client-annex-clause.md).
+the Space's items subtree. Every replicas route accepts a tail targeting the
+Space's replicas URL or a URL beneath it, and refuses a tail on the Space URL.
+`PUT /space/<S>/<C>/meta` and Create Collection carry no rule. The rule reads
+the tail alone; the client-annex clause's two bounds cover the chains it admits.
+A refusal surfaces as the masked `not-found`. Full rules in
+[docs/client-annex-clause.md](docs/client-annex-clause.md).
 
 **Denial reasons:** a refusal is a 404 whose `type` is the merged `not-found`,
 with two exceptions named by `type` only, the status unchanged (`denialError` in

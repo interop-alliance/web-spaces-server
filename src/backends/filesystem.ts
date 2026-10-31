@@ -8568,6 +8568,33 @@ export class FileSystemBackend implements StorageBackend {
   }
 
   /**
+   * Runs a registration write or delete under the two keys it takes, in the
+   * one order both take them: the Space-wide `replicas:` key (its own key
+   * domain), which serializes every registration write and delete of one
+   * Space so a write that reads the Space's registrations inside its critical
+   * section (the bound on a delegated create, `decideReplicaWrite`) sees a set
+   * no concurrent delete can thin, then the registration's own key.
+   * @param options {object}
+   * @param options.spaceId {string}
+   * @param options.replicaId {string}
+   * @param options.run {() => Promise<T>}
+   * @returns {Promise<T>}
+   */
+  #underReplicaLocks<T>({
+    spaceId,
+    replicaId,
+    run
+  }: {
+    spaceId: string
+    replicaId: string
+    run: () => Promise<T>
+  }): Promise<T> {
+    return this.#writeMutex.run(`replicas:${spaceId}`, () =>
+      this.#writeMutex.run(this.#replicaLockKey({ spaceId, replicaId }), run)
+    )
+  }
+
+  /**
    * The mutex key (`replica:` prefix, its own key domain) that serializes a
    * registration's create, its delete and its loop state writes, so a state
    * write cannot land after the delete that removes the state file. Nothing
@@ -8599,16 +8626,19 @@ export class FileSystemBackend implements StorageBackend {
   async createReplica({
     spaceId,
     record,
-    pullsChunks
+    pullsChunks,
+    requireRegisteredSource
   }: {
     spaceId: string
     record: ReplicaRegistration
     pullsChunks: boolean
+    requireRegisteredSource?: boolean
   }): Promise<StoredReplica> {
     const { stored } = await this.writeReplica({
       spaceId,
       record,
       pullsChunks,
+      requireRegisteredSource,
       createOnly: true
     })
     return stored
@@ -8616,16 +8646,19 @@ export class FileSystemBackend implements StorageBackend {
 
   /**
    * Creates or replaces a registration under its preconditions: under the
-   * Space gate, into a Space that still has its Metadata object, and under
-   * the registration's own key, so a loop state write or a delete cannot
-   * interleave. The stored record is read first and the write decided
-   * against it (`decideReplicaWrite`). A create removes a state file an
-   * earlier registration under the id left, and advances the Space Metadata
-   * object's local segment; a replacement keeps both.
+   * Space gate, into a Space that still has its Metadata object, under the
+   * Space's registrations key, so no other registration write or delete of
+   * the Space interleaves, and under the registration's own key, so a loop
+   * state write cannot. The stored record is read first and the write decided
+   * against it (`decideReplicaWrite`), the Space's registrations read under
+   * the same keys when the decision needs them. A create removes a state file
+   * an earlier registration under the id left, and advances the Space
+   * Metadata object's local segment; a replacement keeps both.
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.record {ReplicaRegistration}   the client's shape
    * @param options.pullsChunks {boolean}
+   * @param [options.requireRegisteredSource] {boolean}
    * @param [options.createOnly] {boolean}
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
@@ -8635,6 +8668,7 @@ export class FileSystemBackend implements StorageBackend {
     spaceId,
     record,
     pullsChunks,
+    requireRegisteredSource = false,
     createOnly = false,
     ifMatch,
     ifNoneMatch
@@ -8642,6 +8676,7 @@ export class FileSystemBackend implements StorageBackend {
     spaceId: string
     record: ReplicaRegistration
     pullsChunks: boolean
+    requireRegisteredSource?: boolean
     createOnly?: boolean
     ifMatch?: string
     ifNoneMatch?: HeldValidators
@@ -8652,9 +8687,10 @@ export class FileSystemBackend implements StorageBackend {
       spaceId,
       container: { requestName: replicaWriteRequestName({ createOnly }) },
       write: () =>
-        this.#writeMutex.run(
-          this.#replicaLockKey({ spaceId, replicaId }),
-          async () => {
+        this.#underReplicaLocks({
+          spaceId,
+          replicaId,
+          run: async () => {
             const { stored, prior } = await decideReplicaWrite({
               prior: await this.#readReplicaFile(filePath),
               record,
@@ -8664,6 +8700,8 @@ export class FileSystemBackend implements StorageBackend {
                 resolveGeneration(
                   (await this.getSpaceMetadata({ spaceId }))?.metaGeneration
                 ),
+              listReplicas: () => this.listReplicas({ spaceId }),
+              requireRegisteredSource,
               createOnly,
               ifMatch,
               ifNoneMatch
@@ -8690,7 +8728,7 @@ export class FileSystemBackend implements StorageBackend {
             await this.#advanceSpaceMetaLocal({ spaceId })
             return { stored }
           }
-        )
+        })
     })
   }
 
@@ -8851,9 +8889,10 @@ export class FileSystemBackend implements StorageBackend {
     return this.#underSpaceWrite({
       spaceId,
       write: () =>
-        this.#writeMutex.run(
-          this.#replicaLockKey({ spaceId, replicaId }),
-          async () => {
+        this.#underReplicaLocks({
+          spaceId,
+          replicaId,
+          run: async () => {
             if (!(await unlinkIfPresent(filePath))) {
               return false
             }
@@ -8863,7 +8902,7 @@ export class FileSystemBackend implements StorageBackend {
             await this.#advanceSpaceMetaLocal({ spaceId })
             return true
           }
-        )
+        })
     })
   }
 

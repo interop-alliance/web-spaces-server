@@ -31,9 +31,10 @@ real earlier edit: a rename at t1 would lose to a backend registration at t2.
 Not moving the validator would serve a 304 over changed `backends`, `replicas`
 or derived `encryption`. Neither is acceptable.
 
-A second question sat beside it. The registration record itself is
-controller-only, but a `replicas` member on the served Space Metadata object
-tells every reader of that object (an app's Space-wide grant, the client-annex
+A second question sat beside it. The registration record itself is read under
+the controller's capability or a delegated one rooted in the Space, and never
+anonymously, but a `replicas` member on the served Space Metadata object tells
+every reader of that object (an app's Space-wide grant, the client-annex
 clause's `GET /space/<S>/meta` shape) which hosts hold the user's data.
 
 ## Decision

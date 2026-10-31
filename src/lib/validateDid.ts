@@ -188,7 +188,8 @@ export function parseSelfHostedWebvh(
   ) {
     return undefined
   }
-  return parsed
+  const { scid, spaceId, collectionId } = parsed
+  return { scid, spaceId, collectionId }
 }
 
 /**

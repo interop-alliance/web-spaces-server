@@ -722,10 +722,10 @@ export function verifiedInvocation({
  *   like `/kms/keystores`).
  * @param [options.containerRule] {ContainerRule}   the container rule this
  *   operation carries, when it is an unsafe method at a container URL
- *   (`lib/containerRule.ts`). The `exact-delete` and `space-subtree-put`
- *   rules are keyed on the Space's canonical trailing-slash URL, which
- *   `attenuatedRootTarget` must then carry; `controller-only` reads no
- *   target.
+ *   (`lib/containerRule.ts`). The `exact-delete`, `space-subtree-put` and
+ *   `replicas-subtree` rules are keyed on the Space's canonical trailing-slash
+ *   URL, which `attenuatedRootTarget` must then carry; `controller-only`
+ *   reads no target.
  * @param [options.maxChainLength] {number}   max delegation chain length,
  *   root included (see `verifyZcap`)
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL in
@@ -794,8 +794,8 @@ export async function handleZcapVerify({
   ) {
     throw new UnauthorizedError({ requestName })
   }
-  // The other two rules compare the tail's target against the Space URL; the
-  // `controller-only` rule reads no target, so it also serves a container
+  // The other three rules compare the tail's target against the Space URL;
+  // the `controller-only` rule reads no target, so it also serves a container
   // outside the PWS route family (a `/kms` keystore).
   if (
     containerRule &&

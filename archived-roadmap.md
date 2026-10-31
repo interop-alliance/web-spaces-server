@@ -7289,3 +7289,94 @@ target, since a GET-only grant of one Resource is predicate 4's shape and is
 admitted to any grantee. `test/ladder-replica-pull.test.ts` holds the two-server
 cases, including the branch-two auxiliary pull expected to flip under freewallet
 FW-689; archived.
+
+### WSS-226: [M] (*) Open the replicas route to a root-chained delegated invocation
+
+- status: done
+- priority: medium
+- backend: *
+- labels: replication, registration, zcap, client-annex
+- discovered-from: freewallet FW-688 (2026-10-26)
+- touches:
+  - web-spaces-server: `src/requests/ReplicaRequest.ts` (each handler's
+    `containerRule: 'controller-only'`, `:78`, `:144`, `:180`, `:224`, `:305`,
+    and the module header), `src/routes.ts` (the replicas comment),
+    `src/lib/containerRule.ts`, `src/lib/clientAnnexClause.ts`,
+    docs/replication.md, docs/client-annex-clause.md ("Controller-only
+    operations"), ARCHITECTURE.md (the `src/sync/` entry, "controller-only"),
+    `decisions/0002` (amended 2026-10-26), `decisions/0005` (its Context says
+    the registration record is controller-only) -- shipped 2026-10-31; the
+    create bound lives in `src/sync/registration.ts`
+    (`assertDelegatedCreateNamesRegisteredSource`), and
+    `src/lib/containerRule.ts` needed no edit (it never named the route)
+  - portable-web-spaces-spec: resolved 2026-10-29 -- decision 0013 is amended
+    and the replication companion ("Registrations", Authorization) states the
+    delegated path and the `POST` bound; WASS-1 / WSS-59's Authorization column
+    for `replicas` still open
+  - app-connect-spec: decision 0003 (the replica-server-side predicate) --
+    already states predicate 7 (2026-10-26), nothing further
+  - pws-client: the replica methods' "Controller-only" JSDoc
+    (`Space.ts:791-875`); `/paths` exports `spaceReplicas` and
+    `replicaRegistration` -- the JSDoc already names the delegated path and the
+    create bound; the remaining wording is WCL-144's
+  - was-conformance-suite: PWSCS-23 ("registration endpoints are
+    controller-only, including GET") revised -- its delegated-route and
+    POST-bound cases are filed; its touches now name this item
+- acceptance:
+  - [x] Every replicas route (list, register, read, remove, status, and
+        WSS-227's PUT) admits a delegated invocation whose chain roots in the
+        Space's root, in place of `controller-only`. The reads keep demanding
+        the auth headers
+  - [x] Clause A gains a predicate for it: the `invocationTarget` is the Space's
+        replicas URL `/space/<S>/replicas` exactly (or its `*` subtree form once
+        WASS-58's marker ships), `allowedAction` is within {GET, POST, PUT,
+        DELETE}, the parent is the Space's synthesized root, with no pointer
+        gate and no grantee bound
+  - [x] A delegated POST is admitted only when its `fromSpace` equals the
+        `fromSpace` of a registration already stored on that Space. A root POST
+        stays unbounded
+  - [x] The Delete Replica guard still refuses removing the one registration
+        that maps the Space's did:webvh controller, for a delegated caller too
+  - [x] Two-server tests: a ladder-signed delegated grant lists, reads status,
+        re-registers against an existing `fromSpace`, pauses through PUT, and
+        removes a registration on a promoted replica; a delegated POST naming a
+        new `fromSpace` is refused; a root POST naming one is admitted
+  - [x] docs, ARCHITECTURE.md, and the Context sentence of `decisions/0005`
+        state the new authorization
+
+Context. Once a replica Space is promoted to the account did:webvh, its replicas
+routes need a root invocation by a key the account document lists under
+`capabilityInvocation`. A credential-anchored account has none, and every pull
+capability dies at its signer's next withdrawal, a passphrase change included.
+So a session of another credential must be able to maintain the registration.
+The wallet mints a short-lived grant on the replicas URL with its ladder VM, to
+its own bare did:key, and invokes it as that did:key.
+
+The predicate carries no pointer gate, since the replica server could read the
+pointer only from its own copy of the annex, which lags by a pull and does not
+exist before the auxiliary Space is copied. What the grant reaches is bounded
+otherwise. The guard keeps the one mapping registration. A listing exposes pull
+capabilities only their `serverDid` can invoke. The POST bound closes the one
+widening: without it a phished credential's holder could register its own server
+as a second source serving the account DID as `controller`
+(`assertPeerSpaceMatches` only string-compares it, `registration.ts:452`), and
+have that source's tombstones applied to the copy. It is shape-gated, like
+predicates 1 to 5. WSS-225 and this item both edit `clientAnnexClause.ts` and
+the clause's predicate count; whichever lands second updates the count. Related:
+WSS-209 (a ladder-signed delegation on a replica, under the clause).
+
+Done 2026-10-31. The create bound covers a `PUT` at an absent id as well as a
+`POST`, since a `PUT` there creates through the same checks and the bound would
+otherwise be void; a replacement needs none, `fromSpace` being fixed by `PUT`.
+The refusal is `replica-refused` (409) on `#/fromSpace`, decided before the
+source is read, since a delegated caller may list the registrations and learns
+nothing from it. The two-server cases live in `test/ladder-replica-pull.test.ts`
+("a ladder-signed maintenance grant on a promoted replica Space"); the
+single-pair cases in `test/replication-api.test.ts`. The clause count is seven,
+and the client-annex profile stays at `0.1`. Open tension for WSS-239: once a
+second registration of one source sharing a Collection is refused on the same
+Space, and the controller-log Collection is always selected, a delegated `POST`
+re-registering the account Space has no admitted case left; the delegated path
+then rests on `GET`, `PUT` and `DELETE`.
+
+---

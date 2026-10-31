@@ -2,8 +2,8 @@
 
 This document describes how the server inspects a verified capability chain
 before it admits an invocation. It covers the revocation inspector, the
-client-annex clause (the annex-chain inspector, with its six admitted shapes and
-two invocation-time bounds), and the container rule.
+client-annex clause (the annex-chain inspector, with its seven admitted shapes
+and two invocation-time bounds), and the container rule.
 [ARCHITECTURE.md](../ARCHITECTURE.md) holds the layer map, the root-vs-delegated
 invocation explanation, the denial-reason material, and the glossary.
 
@@ -30,7 +30,7 @@ ladder-anchored account document. It is recognized by relation asymmetry: a
 that is absent from `capabilityInvocation`. (Resolution of that document is
 described in [webvh-controllers.md](webvh-controllers.md).)
 
-A delegation signed by a ladder VM is admitted only in one of six shapes.
+A delegation signed by a ladder VM is admitted only in one of seven shapes.
 
 ## Shape 1: the Space items subtree
 
@@ -170,6 +170,49 @@ Resource under the Space is the fourth shape, admitted to any grantee, so a
 pull-shaped grant narrowed to one Resource is not refused by this shape's target
 bound.
 
+## Shape 7: a maintenance grant on the replicas route
+
+The seventh shape is the grant a wallet session holds to maintain the replica
+registrations of a promoted replica Space, on the replica server. Four bounds
+hold together.
+
+- Its `invocationTarget` is the Space's replicas URL `/space/<S>/replicas`
+  exactly. A registration URL beneath it does not qualify as the target. The
+  grant reaches those by attenuation.
+- Its `allowedAction` is present, non-empty, and within {GET, HEAD, POST, PUT,
+  DELETE}, the verbs the replicas routes serve. Every `GET` route answers
+  `HEAD`.
+- Its parent is the Space's synthesized root.
+- The delegator's log is a registration's copy, not a log self-hosted on this
+  server.
+
+No grantee bound and no pointer gate apply. A promoted replica Space's
+controller is the account `did:webvh`, and a credential-anchored account holds
+no key that document lists under `capabilityInvocation`, so nothing can
+root-invoke there. The wallet signs this grant with the ladder VM to its own
+bare `did:key`, invokes it as that `did:key`, and keeps it short-lived. With it
+the session lists the registrations, reads a status, re-registers a source,
+replaces a pull capability in place, pauses and resumes, and removes a
+registration.
+
+The replica server cannot gate the grant on the annex pointer. Its copy of the
+client-annex document lags the source by a pull, and does not exist before the
+auxiliary Space is copied. What the grant reaches is bounded on the route
+instead (see [replication.md](replication.md#authorization)). A delegated
+create, by `POST` or by `PUT` at an absent id, admits only a `fromSpace` a
+registration on the Space already names, so the grant cannot introduce a new
+source. A delegated pause of the one registration that maps the Space's
+controller is refused, and Delete Replica keeps that registration. A listing
+exposes pull capabilities only the replica server's own DID can invoke.
+
+The shape is the one exception to the rule that every admitted ladder delegation
+leaves a record. It holds only on a replica server, whose copy is never the
+account's log of record, and the fourth bound enforces that. On the server that
+hosts the account's log of record, the same grant is refused. There the
+controller's root invocation and the other shapes maintain the Space, and
+admitting the shape would hand a ladder-signed grant the account Space's own
+registrations with no record anywhere.
+
 ## The ladder invocation-time bound
 
 The zcap library's target attenuation is a `/`-boundary prefix rule. A grant on
@@ -255,13 +298,15 @@ account's ladder VMs standing.
 
 This server makes that claim with its service description's
 `https://w3id.org/pws/client-annex` entry at version `0.1`, which names the
-clause as enforced here, with its six admission predicates. A change to what the
-clause admits is a new version of that entry.
+clause as enforced here, with its seven admission predicates. A change to what
+the clause admits is a new version of that entry.
 
 ## The container rule
 
 The container rule lives in `lib/containerRule.ts`. An unsafe method at a
-container URL is controller-only, with two exceptions.
+container URL is controller-only, with two exceptions. A fourth rule, on the
+replicas routes, is of the same kind: it reads the invoked capability's target
+to keep a data grant out of a reserved sub-resource.
 
 The hazard is that a data grant's `invocationTarget` is the container URL
 itself, and the zcap library's target attenuation is a `/`-boundary prefix rule.
@@ -305,6 +350,20 @@ synthesized root alone, so a direct root invocation always passes.
   [governed-logs-and-revisions.md](governed-logs-and-revisions.md)). A tail
   aimed at the Collection container URL, at the log URL, or at a Resource stays
   refused there.
+
+### The replicas routes
+
+Every replicas route (`/space/<S>/replicas`, a registration beneath it, and its
+`status`), the reads included, carries the `replicas-subtree` rule. A direct
+root invocation passes. A delegated capability passes only when its tail targets
+the Space's replicas URL or a URL beneath it. A tail on the Space URL, the shape
+of an app's data grant, is refused, since it would reach the routes by
+attenuation and with them the Space's pull capabilities, its pull loops and its
+registrations. The maintenance grant of
+[Shape 7](#shape-7-a-maintenance-grant-on-the-replicas-route) targets the
+replicas URL itself and passes. The bounds on what an admitted delegated
+invocation may do there are the route's (see
+[replication.md](replication.md#authorization)).
 
 ### Operations outside the rule
 

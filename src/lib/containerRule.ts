@@ -16,7 +16,7 @@
  * delegator uses. It is not the whole answer for Delete Space: the
  * client-annex clause adds two signer-keyed bounds on top of it (below).
  *
- * Three rules, spread over five protected operations:
+ * Four rules, spread over eleven protected operations:
  *
  * - `controller-only` -- only a direct root-capability invocation passes. A
  *   delegated capability is refused whatever its `allowedAction`. Used by
@@ -42,6 +42,14 @@
  *   by `PUT /space/<S>/<C>/meta/log`, the guarded create of the Collection's
  *   governing history log (which from then on derives the Collection's served
  *   `encryption` descriptor, and refuses every direct `encryption` write).
+ * - `replicas-subtree` -- a direct root invocation, or a delegated capability
+ *   whose tail targets the Space's replicas URL `/space/<S>/replicas` or a URL
+ *   beneath it. Used by every replicas route, the reads included. A grant on
+ *   the Space URL, the shape an app's data grant carries, reaches the replicas
+ *   URL by attenuation and would otherwise list the Space's pull capabilities,
+ *   pause its pull loops and remove its registrations. The rule keeps such a
+ *   grant out and admits the maintenance grant the client-annex clause's
+ *   seventh shape describes, whose target is the replicas URL itself.
  *
  * `PUT /space/<S>/<C>/meta` carries no rule. It once carried
  * `space-subtree-put`, which refused the Collection-scoped grant an app holds
@@ -65,21 +73,22 @@
  * ladder-signed or transient-annex-signed chain that this rule would admit.
  *
  * A refusal binds the capability decision only, like every other chain
- * inspection failure. All five protected handlers are capability-only, so a
+ * inspection failure. Every protected handler is capability-only, so a
  * refusal surfaces as the ordinary masked `not-found` denial.
  */
 import type { InspectCapabilityChain } from '@interop/zcap'
 import { actionsExactly, type ChainCapability } from './chainCapability.js'
+import { REPLICAS_SEGMENT } from './paths.js'
 
 /**
  * Which container rule one verification applies.
  */
 export type ContainerRule =
-  'controller-only' | 'exact-delete' | 'space-subtree-put'
+  'controller-only' | 'exact-delete' | 'space-subtree-put' | 'replicas-subtree'
 
 /**
  * Builds the container-rule inspection hook for one verification: the whole
- * decision, for all three rules. A chain of length one is the synthesized
+ * decision, for all four rules. A chain of length one is the synthesized
  * root alone -- a direct root invocation -- and always passes. The zcap
  * library runs the hook on that chain too, so the root case needs no separate
  * treatment at the call site. `controller-only` refuses every longer chain;
@@ -90,7 +99,7 @@ export type ContainerRule =
  * @param options {object}
  * @param options.rule {ContainerRule}   the rule the invoked operation carries
  * @param [options.spaceUrl] {string}   the Space's canonical trailing-slash
- *   URL; `controller-only` reads none, and without one the other two rules
+ *   URL; `controller-only` reads none, and without one the other three rules
  *   match no tail and refuse every delegated chain
  * @returns {InspectCapabilityChain}
  */
@@ -128,6 +137,25 @@ export function containerRuleInspector({
           'Delete Space accepts a delegated capability only when the invoked ' +
             "capability's invocationTarget is exactly that Space's canonical " +
             'trailing-slash URL and its allowedAction is exactly ["DELETE"].'
+        )
+      }
+    }
+    if (rule === 'replicas-subtree') {
+      const replicasUrl = spaceUrl && `${spaceUrl}${REPLICAS_SEGMENT}`
+      const target = tail.invocationTarget
+      if (
+        replicasUrl !== undefined &&
+        typeof target === 'string' &&
+        (target === replicasUrl || target.startsWith(`${replicasUrl}/`))
+      ) {
+        return { valid: true }
+      }
+      return {
+        valid: false,
+        error: new Error(
+          'The replicas routes accept a delegated capability only when the ' +
+            "invoked capability's invocationTarget is the Space's replicas " +
+            'URL or a URL beneath it.'
         )
       }
     }
