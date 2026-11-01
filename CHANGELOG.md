@@ -4,6 +4,18 @@
 
 ### Added
 
+- Every Resource and chunk record stores the content digest of its stored
+  representation, the `Digest` header's `mh=` multihash form (sha-256) over the
+  bytes a `GET` serves, a JSON body as re-serialized. The filesystem sidecar
+  carries it as `digest` and the Postgres `resources`, `chunks` and
+  `chunk_staging` rows in a `digest` column, recorded inside the write's
+  critical section with the stamp, on the request, replication and import paths.
+  A soft delete keeps the deleted content's digest on the tombstone. Export
+  strips the member from the archived sidecars and import ignores an archived
+  one, recording the digest of each file it writes. The filesystem layout moves
+  to version 10 and the Postgres schema to migration 16; each refuses a
+  populated store written before it with `StoreVersionError`.
+
 - The replicas routes admit a delegated invocation whose invoked capability
   targets the Space's replicas URL or a URL beneath it, in place of
   controller-only: list, register, read, replace, remove and status. That is the
@@ -42,6 +54,15 @@
 
 ### Changed
 
+- The write-once rule on an `immutable` Collection compares the digest of the
+  bytes a write would store with the stored digest, and reads no stored bytes (a
+  live filesystem sidecar with no digest is compared through a digest of its
+  stored file, so the rule holds over it too). A write over a tombstone is held
+  to the deleted content: a repeat is a no-op answering the tombstone's `ETag`
+  with `size` 0 and the Resource stays deleted, and a different body is refused
+  with `resource-immutable` (409). The repeat reclaims a file a torn delete left
+  beside the tombstone. A tombstone with no digest (one an import wrote) still
+  admits an ordinary create.
 - Breaking wire change to `/service`. `serverDid` moves from `instance` to the
   core `https://w3id.org/pws` entry, beside `originId`. There is no alias under
   `instance`. The `https://w3id.org/pws/replication` entry now carries `url`.

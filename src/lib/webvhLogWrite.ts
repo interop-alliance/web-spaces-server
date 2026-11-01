@@ -24,6 +24,7 @@ import {
   StorageError
 } from '../errors.js'
 import { readBoundedBody } from './bodyLimit.js'
+import { storedJsonBytes } from './contentDigest.js'
 import type { HeldValidators } from './etag.js'
 import { etagOf } from './etag.js'
 import { isFastForward } from './governedLog.js'
@@ -161,7 +162,7 @@ async function assertExtends({
 }): Promise<{ input: ResourceInput; body: Buffer }> {
   const body =
     input.kind === 'json'
-      ? Buffer.from(JSON.stringify(input.data))
+      ? storedJsonBytes(input.data)
       : await readBoundedBody({ request, reply, payload: input.stream })
   if (!isFastForward({ prior, body })) {
     throw new PreconditionFailedError({

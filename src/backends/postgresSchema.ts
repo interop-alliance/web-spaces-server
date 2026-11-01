@@ -467,8 +467,50 @@ export const MIGRATIONS: Migration[] = [
   // 'record' jsonb, and 'PUT' at the registration URL replaces the row in
   // place. A row written before this version carries no stamp, and there is
   // no stamping step: the step refuses a schema that holds one.
-  stampReplicas
+  stampReplicas,
+  // v16: every 'resources' and 'chunks' row carries 'digest', the content
+  // digest of its stored representation (the 'Digest' header's 'mh=' form), a
+  // tombstone keeping the deleted content's; 'chunk_staging' carries the
+  // staged bytes' digest for the swap to copy. A row written before this
+  // version carries none, and there is no digesting step: the step refuses a
+  // schema that holds a live Resource, a chunk or a staged chunk. A tombstone
+  // row passes with a NULL digest, which the write-once rule reads as
+  // nothing to compare.
+  addContentDigests
 ]
+
+/**
+ * The v16 step. Refuses a schema that holds a live Resource row, a chunk row
+ * or a staged chunk row: each was written before records carried a content
+ * digest, and the `chunks` and `chunk_staging` columns below are added
+ * `NOT NULL` with no default. `resources.digest` is nullable: a tombstone
+ * written with no bytes to digest (an import's, a replica apply's over no
+ * prior row, or one written before this version) has none.
+ * @param client {pg.PoolClient}   the migrating transaction's client
+ * @returns {Promise<void>}
+ */
+async function addContentDigests(client: pg.PoolClient): Promise<void> {
+  const { rows } = await client.query<{ count: number }>(
+    `SELECT (SELECT COUNT(*) FROM resources WHERE NOT deleted)::int
+          + (SELECT COUNT(*) FROM chunks)::int
+          + (SELECT COUNT(*) FROM chunk_staging)::int AS count`
+  )
+  const count = rows[0]!.count
+  if (count > 0) {
+    throw new StoreVersionError({
+      detail:
+        `The Postgres schema holds ${count} live Resource, chunk or staged ` +
+        'chunk row(s) written before records carried a content digest, and ' +
+        'there is no digesting migration. Drop the schema, or restore each ' +
+        'Space from an export archive into an empty store.'
+    })
+  }
+  await client.query(`
+    ALTER TABLE resources ADD COLUMN digest text;
+    ALTER TABLE chunks ADD COLUMN digest text NOT NULL;
+    ALTER TABLE chunk_staging ADD COLUMN digest text NOT NULL;
+  `)
+}
 
 /**
  * The v15 step. Refuses a schema whose `replicas` table holds a row: each

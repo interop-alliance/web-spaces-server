@@ -281,8 +281,12 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   live Resource or chunk through its `.meta.<id>.json` sidecar, keeps a Resource
   tombstone as `.tombstone.<id>.json`, and takes no lock on reads. It derives
   the Collection listing's `totalItems` from the names in a directory listing.
-  Delete Collection leaves a tombstone in both backends. See
-  [docs/filesystem-layout.md](docs/filesystem-layout.md).
+  Delete Collection leaves a tombstone in both backends. Every Resource and
+  chunk record carries the content digest of its stored representation
+  (`src/lib/contentDigest.ts`, the `Digest` header's `mh=` form), recorded in
+  the write's critical section with the stamp; a Resource tombstone keeps the
+  deleted content's, which is how the write-once rule holds over a tombstone.
+  See [docs/filesystem-layout.md](docs/filesystem-layout.md).
 - **`src/errors.ts`** -- custom error classes plus `handleError`, the Fastify
   error handler installed by each route group.
 - **`src/exchanges.ts`** -- the ephemeral exchanges facet

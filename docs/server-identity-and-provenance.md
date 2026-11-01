@@ -84,6 +84,11 @@ from an archived object.
 - `fileDigest` digests a file's bytes in the `Digest` header's `mh=` form.
 - `chunkedDigest` computes a chunked Resource's composite digest.
 
+Both digest forms are defined once in `lib/contentDigest.ts`, which is also
+where the backends take the content digest each Resource and chunk record
+stores. The statements digest the archived bytes, not the stored value, so a
+statement still detects bytes damaged after they were written.
+
 Export signs what these compute, and import recomputes the same values to judge
 a statement.
 

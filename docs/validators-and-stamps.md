@@ -241,7 +241,9 @@ writing statement's `RETURNING`.
 Create or Update Resource (`PUT /space/:s/:c/:id`) answers `201` when the write
 created the Resource, a write over a tombstone included, and `200` when it
 updated a live one. A write-once repeat updates nothing, but the Resource is
-live, so it answers `200` with the stored members. Update Resource Metadata
+live, so it answers `200` with the stored members. A write-once repeat over a
+tombstone answers `200` too, with the tombstone's `ETag`, its media type and a
+`size` of 0; the Resource stays deleted. Update Resource Metadata
 (`PUT .../:id/meta`) answers `200` and never creates. A `/meta` write to an
 absent Resource is a 404.
 

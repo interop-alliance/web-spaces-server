@@ -10,7 +10,7 @@
  */
 import { it, describe, beforeAll, afterAll } from 'vitest'
 import assert from 'node:assert'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 
@@ -561,7 +561,7 @@ describe('revisions descriptor API', () => {
         assert.equal(posted.status, 201)
       })
 
-      it(`[${label}] delete is allowed, and a write over the tombstone is a create`, async () => {
+      it(`[${label}] delete is allowed; a write over the tombstone is held to the deleted content`, async () => {
         const collectionId = await createCollection({
           ...declaration,
           revisions: { immutable: true }
@@ -573,17 +573,39 @@ describe('revisions descriptor API', () => {
           method: 'DELETE'
         })
         assert.equal(deleted.status, 204)
-        const recreated = await putRaw(docUrl, second)
-        assert.equal(recreated.status, 201)
-        assert.notEqual(
-          recreated.headers.get('etag'),
-          created.headers.get('etag')
-        )
-        const read = await alice.pws.request({
-          url: docUrl,
-          method: 'GET'
+        // The tombstone keeps the deleted content's digest, so a different
+        // body is refused: a write-once Collection cannot be edited through
+        // a delete and a re-create.
+        assertProblem(await requestError(putRaw(docUrl, second)), {
+          status: 409,
+          type: 'resource-immutable'
         })
-        assert.deepEqual(read.data, JSON.parse(second))
+        // A repeat of the deleted content is a no-op answering the
+        // tombstone's validator, and the Resource stays deleted.
+        const repeated = await putRaw(docUrl, first)
+        assert.equal(repeated.status, 200)
+        const tombstoneEtag = repeated.headers.get('etag')
+        assert.ok(tombstoneEtag, 'expected the tombstone validator')
+        assert.notEqual(tombstoneEtag, created.headers.get('etag'))
+        assert.equal(repeated.data.size, 0)
+        const read = await requestError(
+          alice.pws.request({ url: docUrl, method: 'GET' })
+        )
+        assert.equal(read.response?.status, 404)
+        // The tombstone stands unchanged.
+        const tombstone = JSON.parse(
+          await readFile(
+            path.join(
+              backend.spacesDir,
+              spaceId,
+              collectionId,
+              tombstoneSidecarFileName('doc')
+            ),
+            'utf8'
+          )
+        )
+        assert.equal(tombstone.deleted, true)
+        assert.equal(typeof tombstone.digest, 'string')
       })
 
       it(`[${label}] chunks follow the rule`, async () => {
@@ -677,43 +699,120 @@ describe('revisions descriptor API', () => {
     })
 
     it('a repeat over a re-create torn before its sidecar answers 201 with fresh provenance', async () => {
-      for (const immutable of [false, true]) {
-        const collectionId = await createCollection({
-          revisions: { immutable }
-        })
-        const collectionDir = path.join(
-          backend.spacesDir,
-          spaceId,
-          collectionId
-        )
-        const sidecarPath = path.join(collectionDir, metaSidecarFileName('doc'))
-        const tombstonePath = path.join(
-          collectionDir,
-          tombstoneSidecarFileName('doc')
-        )
-        const docUrl = `${baseServerUrl}space/${spaceId}/${collectionId}/doc`
-        await putRaw(docUrl, '{"v":1}')
-        await alice.pws.request({
-          url: docUrl,
-          method: 'DELETE'
-        })
-        const tombstone = await readFile(tombstonePath)
-        await putRaw(docUrl, '{"v":2}')
-        // The re-create's bytes landed and its sidecar did not.
-        await rm(sidecarPath)
-        await writeFile(tombstonePath, tombstone)
+      const collectionId = await createCollection({
+        revisions: { immutable: false }
+      })
+      const collectionDir = path.join(backend.spacesDir, spaceId, collectionId)
+      const sidecarPath = path.join(collectionDir, metaSidecarFileName('doc'))
+      const tombstonePath = path.join(
+        collectionDir,
+        tombstoneSidecarFileName('doc')
+      )
+      const docUrl = `${baseServerUrl}space/${spaceId}/${collectionId}/doc`
+      await putRaw(docUrl, '{"v":1}')
+      await alice.pws.request({
+        url: docUrl,
+        method: 'DELETE'
+      })
+      const tombstone = await readFile(tombstonePath)
+      await putRaw(docUrl, '{"v":2}')
+      // The re-create's bytes landed and its sidecar did not.
+      await rm(sidecarPath)
+      await writeFile(tombstonePath, tombstone)
 
-        const healed = await putRaw(docUrl, '{"v":2}')
-        assert.equal(healed.status, 201)
-        assert.equal(healed.data.createdBy, alice.did)
-        assert.equal(healed.data.createdAt, healed.data.updatedAt)
-        const read = await alice.pws.request({
-          url: docUrl,
-          method: 'GET'
-        })
-        assert.deepEqual(read.data, { v: 2 })
-        assert.equal(read.headers.get('etag'), healed.headers.get('etag'))
-      }
+      const healed = await putRaw(docUrl, '{"v":2}')
+      assert.equal(healed.status, 201)
+      assert.equal(healed.data.createdBy, alice.did)
+      assert.equal(healed.data.createdAt, healed.data.updatedAt)
+      const read = await alice.pws.request({
+        url: docUrl,
+        method: 'GET'
+      })
+      assert.deepEqual(read.data, { v: 2 })
+      assert.equal(read.headers.get('etag'), healed.headers.get('etag'))
+    })
+
+    it('a write-once repeat over a tombstone reclaims the file a torn delete left beside it', async () => {
+      const collectionId = await createCollection({
+        revisions: { immutable: true }
+      })
+      const collectionDir = path.join(backend.spacesDir, spaceId, collectionId)
+      const docUrl = `${baseServerUrl}space/${spaceId}/${collectionId}/doc`
+      await putRaw(docUrl, '{"v":1}')
+      const [fileName] = (await readdir(collectionDir)).filter(name =>
+        name.startsWith('r.doc.')
+      )
+      assert.ok(fileName, 'expected the stored representation file')
+      const bytes = await readFile(path.join(collectionDir, fileName))
+      await alice.pws.request({ url: docUrl, method: 'DELETE' })
+      // A delete cut short after its tombstone: the file is back beside it.
+      await writeFile(path.join(collectionDir, fileName), bytes)
+
+      // The repeat is the only write the id takes again, so it reclaims the
+      // file, and the tombstone stands.
+      const repeated = await putRaw(docUrl, '{"v":1}')
+      assert.equal(repeated.status, 200)
+      const names = await readdir(collectionDir)
+      assert.ok(!names.some(name => name.startsWith('r.doc.')))
+      assert.ok(names.includes(tombstoneSidecarFileName('doc')))
+      const read = await requestError(
+        alice.pws.request({ url: docUrl, method: 'GET' })
+      )
+      assert.equal(read.response?.status, 404)
+    })
+
+    it('a live sidecar with no digest is still held, through the stored file', async () => {
+      // The rule never lapses over a live Resource: a sidecar that lost its
+      // digest is compared through a digest of the file it names.
+      const collectionId = await createCollection({
+        revisions: { immutable: true }
+      })
+      const collectionDir = path.join(backend.spacesDir, spaceId, collectionId)
+      const sidecarPath = path.join(collectionDir, metaSidecarFileName('doc'))
+      const docUrl = `${baseServerUrl}space/${spaceId}/${collectionId}/doc`
+      const created = await putRaw(docUrl, '{"v":1}')
+      const { digest, ...undigested } = JSON.parse(
+        await readFile(sidecarPath, 'utf8')
+      )
+      assert.equal(typeof digest, 'string')
+      await writeFile(sidecarPath, JSON.stringify(undigested))
+
+      assertProblem(await requestError(putRaw(docUrl, '{"v":2}')), {
+        status: 409,
+        type: 'resource-immutable'
+      })
+      const repeated = await putRaw(docUrl, '{"v":1}')
+      assert.equal(repeated.status, 200)
+      assert.equal(repeated.headers.get('etag'), created.headers.get('etag'))
+      const read = await alice.pws.request({ url: docUrl, method: 'GET' })
+      assert.deepEqual(read.data, { v: 1 })
+    })
+
+    it('a tombstone with no digest admits a create', async () => {
+      // An import writes a tombstone with no bytes to digest. Such a
+      // tombstone holds nothing the rule can compare, so a write over it is
+      // an ordinary create.
+      const collectionId = await createCollection({
+        revisions: { immutable: true }
+      })
+      const collectionDir = path.join(backend.spacesDir, spaceId, collectionId)
+      const tombstonePath = path.join(
+        collectionDir,
+        tombstoneSidecarFileName('doc')
+      )
+      const docUrl = `${baseServerUrl}space/${spaceId}/${collectionId}/doc`
+      await putRaw(docUrl, '{"v":1}')
+      await alice.pws.request({ url: docUrl, method: 'DELETE' })
+      const { digest, ...undigested } = JSON.parse(
+        await readFile(tombstonePath, 'utf8')
+      )
+      assert.equal(typeof digest, 'string')
+      await writeFile(tombstonePath, JSON.stringify(undigested))
+
+      const created = await putRaw(docUrl, '{"v":2}')
+      assert.equal(created.status, 201)
+      const read = await alice.pws.request({ url: docUrl, method: 'GET' })
+      assert.deepEqual(read.data, { v: 2 })
     })
 
     it('a Resource metadata write is not refused', async () => {

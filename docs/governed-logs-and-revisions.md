@@ -166,19 +166,34 @@ write that lands between the two commits committed before the log write was
 answered.
 
 Inside the critical section, after its preconditions pass, the backend compares
-a write over a live Resource or chunk with the stored representation. The media
-type is compared without its parameters and case-insensitively, so a retry that
-adds `; charset=utf-8` is still a repeat. Bytes are compared exactly, a JSON
-body as the `JSON.stringify` serialization both backends store, so a different
-key order is a different body. The filesystem backend compares the stored size
-first, then JSON bytes directly or a SHA-256 of a binary body read through the
-upload cap. An over-cap body answers `payload-too-large` (413), as a write
-would.
+a write over a live Resource or chunk with the stored record. The media type is
+compared without its parameters and case-insensitively, so a retry that adds
+`; charset=utf-8` is still a repeat. The bytes are compared through the content
+digest every record carries (`lib/contentDigest.ts`): the backend digests the
+bytes the write would store, a JSON body as the `JSON.stringify` serialization
+both backends store, and compares that with the stored `digest`. So a different
+key order is a different body, and no stored bytes are read. The filesystem
+backend digests a binary body through the upload cap, so an over-cap body
+answers `payload-too-large` (413), as a write would, and over a live record it
+compares the stored file's size first, so a body of another length is refused
+before it is read. A live sidecar with no `digest` is still held: the backend
+digests the stored file and compares that, so the rule never lapses over a live
+record.
 
 A repeat is a no-op answering the stored `ETag`, with no new stamp and no feed
-position. A byte-identical repeat over a live Resource or chunk whose sidecar
-carries no validator stamps the sidecar and answers the new `ETag`. Any other
-write is refused with `resource-immutable` (409).
+position. A repeat over a live Resource or chunk whose sidecar carries no
+validator stamps the sidecar and answers the new `ETag`. Any other write is
+refused with `resource-immutable` (409).
+
+A tombstone keeps the digest of the content it replaced, so a write over one is
+held to the same rule against the deleted content. The repeat is the only write
+the id takes again, so on the filesystem backend it reclaims a representation
+file a delete cut short left beside the tombstone. A repeat of it is a no-op
+answering the tombstone's `ETag`, with `size` 0, and the Resource stays deleted.
+A different body is refused with `resource-immutable`: a write-once Collection
+cannot be edited through a delete and a re-create. A tombstone with no digest,
+one an import or a replica apply wrote with no bytes to digest, holds nothing to
+compare, so a write over it is an ordinary create.
 
 A filesystem representation file no sidecar names is a write torn between its
 bytes and its sidecar, which never committed. It is not a stored Resource or
@@ -187,8 +202,7 @@ chunk, so a write over it is a create, whatever its body.
 Both backends decide the rule before the unique-claim scans (blinded `unique`
 attributes and `unique` plaintext indexes). A write the rule answers runs no
 Collection scan, and a changed body that also collides answers
-`resource-immutable`. A tombstone keeps no bytes, so a write over one is an
-ordinary create.
+`resource-immutable`.
 
 Delete, Resource `/meta` writes, and imports are not restricted. An import is
 skip-not-overwrite, so it never changes a stored Resource, and an archived body

@@ -1249,12 +1249,17 @@ export interface StorageBackend {
      * `true` when the target Collection is write-once (its `revisions`
      * descriptor sets `immutable`). Evaluated inside the write's critical
      * section, after the preconditions: over a live Resource, a write whose
-     * content type and bytes equal the stored representation is a no-op that
+     * media type and content digest equal the stored record's is a no-op that
      * resolves the stored validator and members (no new stamp, no feed
-     * position, `created` false), and any
-     * other write is refused with `ResourceImmutableError` (409). A write to
-     * an absent id or over a tombstone is an ordinary create. The media type
-     * is compared without its parameters.
+     * position, `created` false), and any other write is refused with
+     * `ResourceImmutableError` (409). A tombstone keeps the deleted content's
+     * digest, so a write over one is held to the same rule: a repeat answers
+     * the tombstone's validator and leaves the Resource deleted, and a
+     * different body is refused. A tombstone with no digest (written with no
+     * bytes to digest) holds nothing to compare, so a write over it, like a
+     * write to an absent id, is an ordinary create. The media type is
+     * compared without its parameters, and the digest is of the bytes the
+     * write would store, so no stored bytes are read.
      *
      * A recheck callback when the request layer read the Collection as not
      * write-once. That read ran before the write's lock, and a governing

@@ -1728,7 +1728,7 @@ describe('Chunk replication between servers', () => {
       await pull({ server: replica, spaceId: 'c13-dst' })
     })
 
-    it('takes a new life of a Resource with fewer chunks, with no stall', async () => {
+    it('replicates the delete; the source refuses a second life with other content', async () => {
       source.clock.now += 1_000
       replica.clock.now += 1_000
       const deleted = await call({
@@ -1737,38 +1737,32 @@ describe('Chunk replication between servers', () => {
         method: 'DELETE'
       })
       assert.equal(deleted.statusCode, 204)
-      await putParent({
+      // The tombstone keeps the deleted content's digest, so a write-once
+      // Collection cannot be edited through a delete and a re-create: a
+      // different body over the tombstone is refused on the source.
+      const refused = await call({
         server: source,
-        spaceId: 'c13-src',
-        resourceId: 'r',
+        path: '/space/c13-src/files/r',
+        method: 'PUT',
         json: { life: 2 }
       })
-      const secondLife = blobs(360, 370)
-      await putChunks({
-        server: source,
-        spaceId: 'c13-src',
-        resourceId: 'r',
-        chunks: secondLife
-      })
+      assert.equal(refused.statusCode, 409, refused.payload)
+      assert.match(refused.json().type, /#resource-immutable$/)
+      // The replica takes the tombstone, and the chunk set goes with it.
       await pull({ server: replica, spaceId: 'c13-dst' })
       const files = await filesStatus({ server: replica, spaceId: 'c13-dst' })
       assert.equal(files.state, 'synced', JSON.stringify(files))
-      assert.deepStrictEqual(
-        (
-          await readParent({
-            server: replica,
-            spaceId: 'c13-dst',
-            resourceId: 'r'
-          })
-        ).json(),
-        { life: 2 }
-      )
-      await assertChunks({
+      const parent = await readParent({
         server: replica,
         spaceId: 'c13-dst',
-        resourceId: 'r',
-        expected: secondLife
+        resourceId: 'r'
       })
+      assert.equal(parent.statusCode, 404)
+      const chunks = await call({
+        server: replica,
+        path: '/space/c13-dst/files/r/chunks/'
+      })
+      assert.equal(chunks.statusCode, 404)
     })
   })
 

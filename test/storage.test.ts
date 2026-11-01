@@ -527,10 +527,12 @@ describe('Storage API', () => {
         await importArchive({ backend: backend, spaceId: dst, tarStream: pack })
 
         // The tombstone survives: no content file, a `deleted` sidecar carried
-        // verbatim, and it stays invisible to normal reads on the target. The
-        // feed position is the one member that does not travel: the target
+        // verbatim, and it stays invisible to normal reads on the target. Two
+        // members do not travel: the feed position, since the target
         // Collection assigns its own (the Collection's create took 1, the live
-        // Resource 2, the tombstone 3), whatever the source's was.
+        // Resource 2, the tombstone 3), whatever the source's was; and the
+        // digest of the deleted content, which export strips and an imported
+        // tombstone, having no bytes, cannot recompute.
         const dstCollectionDir = path.join(tempDir, 'spaces', dst, collectionId)
         const dstTombstone = await backend.readMetaSidecar({
           collectionDir: dstCollectionDir,
@@ -540,6 +542,7 @@ describe('Storage API', () => {
           feedPosition: srcFeedPosition,
           updatedAt: srcUpdatedAt,
           updatedAtCounter: srcCounter,
+          digest: srcDigest,
           ...srcRest
         } = srcTombstone!
         const {
@@ -548,6 +551,8 @@ describe('Storage API', () => {
           updatedAtCounter: dstCounter,
           ...dstRest
         } = dstTombstone!
+        assert.equal(typeof srcDigest, 'string')
+        assert.equal(dstTombstone!.digest, undefined)
         assert.deepEqual(dstRest, srcRest, 'tombstone sidecar carried verbatim')
         // The write stamp is re-minted by the importing backend's clock.
         assert.ok(

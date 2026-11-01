@@ -51,6 +51,12 @@ same either way. `lib/importProvenance.ts` judges the two root entries beside
 it. How the statements are built and judged is described in
 [server-identity-and-provenance.md](server-identity-and-provenance.md).
 
+An archived Resource or chunk sidecar carries no `digest`: both backends leave
+the stored content digest out, as the filesystem backend leaves out its
+server-local `fileName` and `feedPosition`. The archive's provenance statements
+digest the archived bytes themselves, and import ignores an archived `digest`
+and records the digest of each file it writes.
+
 `test/space-archive-fixture.test.ts` pins this server's entry trees against the
 archive fixture that the codec package checks in.
 

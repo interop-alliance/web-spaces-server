@@ -56,7 +56,6 @@ Ready:
 - WSS-70 [M] (*) Keystore deletion (route, backend method, orphan GC)
 - WSS-73 [M] (*) Periodic sweep of Spaces and keystores whose did:webvh
   controller no longer resolves
-- WSS-195 [M] (*) Store the content digest of each Resource and chunk
 
 Chains:
 
@@ -991,69 +990,6 @@ the sweep reaps is what a torn run leaves. An account Space whose unlock Spaces
 are all deleted is unreachable to every client, since nothing can locate it and
 nothing can authorize against it, so the server is the only party that can
 remove it.
-
-### WSS-195: [M] (*) Store the content digest of each Resource and chunk
-
-- status: todo
-- priority: medium
-- backend: *
-- labels: data-model, storage, provenance, collection-metadata
-- discovered-from: WSS-173 (2026-10-03)
-- touches:
-  - web-spaces-server: both backends' Resource and chunk write paths, the
-    filesystem sidecar and the Postgres `resources` and chunk rows, the store
-    layout version, `src/lib/revisions.ts` (the write-once comparison),
-    `src/lib/exportProvenance.ts`, `src/lib/importTar.ts`
-  - space-archive: whether the archived sidecar carries the member
-  - conformance-suite: unaffected unless the digest becomes a served member; the
-    over-tombstone write-once refusal is a spec case once this lands
-  - portable-web-spaces-spec: WASS-49 shipped the tombstone rule as spec text
-    (2026-10-29): the `revisions.immutable` member of the Collection Metadata
-    data model says a write over a tombstone repeats the deleted content or is
-    refused with `resource-immutable` (409). This server admits it as an
-    ordinary create until this item lands; no spec change
-- acceptance:
-  - [ ] Every content write records the digest of the stored representation, the
-        bytes a `GET` serves, in the `Digest` header's `mh=` multihash form
-        (sha-256). A JSON body is digested as stored, after re-serialization,
-        and not as sent
-  - [ ] The stored member's name on the filesystem sidecar and the Postgres
-        column name are signed off by the maintainer before coding
-  - [ ] The digest is written inside the write's critical section, with the
-        stamp, on both backends. A chunked Resource records the composite chunk
-        digest `chunkedDigest` defines
-  - [ ] A soft delete keeps the digest of the content it replaced on the
-        tombstone. On an `immutable` Collection a create over a tombstone with
-        an equal digest then follows the rule spec decision 0012 gives, and one
-        with a different digest is refused with `resource-immutable` (409)
-  - [ ] The write-once check on an `immutable` Collection compares the digest of
-        the bytes the write would store with the stored digest, and reads no
-        stored bytes
-  - [ ] Import recomputes the digest of each record it writes and ignores an
-        archived one
-  - [ ] A populated store written before this layout is refused at boot with
-        `StoreVersionError`, on both backends
-  - [ ] Tests cover JSON, binary, and chunked Resources, the tombstone rule, and
-        import, on both backends
-  - [ ] ARCHITECTURE.md and CHANGELOG.md updated
-
-Context: no backend stores a digest today. The write-once rule therefore
-compares content type and stored bytes on every repeat create. The filesystem
-backend re-hashes the stored file, and Postgres compares the whole `bytea`. A
-tombstone keeps nothing to compare, so a create over one is admitted as an
-ordinary create. That is a known divergence from the spec since 2026-10-29, when
-WASS-49 landed the write-once rule in the core spec with the over-tombstone
-refusal decision 0012 gives; `StorageBackend.writeResource`'s doc comment and
-the filesystem backend's `#answerImmutableRepeat` describe the stopgap and are
-rewritten when the tombstone keeps its digest. Decided 2026-10-03 by the
-maintainer: the digest is of the stored representation, in multihash form. For a
-binary body that equals the request `Digest`. For a JSON body it does not when
-the body was sent non-compact, so the comparison hashes what the write would
-store. Export provenance digests each Resource at export time and reads it
-twice. Whether export signs the stored digest or keeps hashing the archived
-bytes is open, since a stored value does not detect damaged bytes. The
-write-time statements of WSS-184 need a digest at write time and would read this
-one.
 
 ### WSS-5: [L] (*) [after WSS-1] Drive API ToS use-case clearance
 

@@ -81,6 +81,18 @@ import type {
  * backend never sets it, export strips it (`withoutSidecarMembers`), and
  * import ignores an archived one and records the file it writes.
  *
+ * `digest` is the content digest of the stored representation (see
+ * `lib/contentDigest.ts`): the `Digest` header's `mh=` multihash form over
+ * the bytes a `GET` serves, a JSON body as re-serialized. Every write that
+ * leaves a live Resource or chunk records it in the same critical section as
+ * the stamp, from the bytes it wrote. A soft delete carries the deleted
+ * content's digest onto the tombstone, which is what the write-once rule
+ * compares a write over the tombstone with. Export strips it
+ * (`withoutSidecarMembers`), as the archive's provenance statements digest
+ * the archived bytes themselves, and import ignores an archived one and
+ * records the digest of the file it writes; an imported tombstone, having no
+ * bytes, carries none. The Postgres backend keeps the same fact in a column.
+ *
  * `feedPosition` is the Resource's position in its Collection's changes feed:
  * each content write, metadata write, soft delete, and import of the Resource
  * takes the Collection's next position. It is one server's fact about its own
@@ -89,7 +101,8 @@ import type {
  * Postgres backend keeps the same fact in a column instead.
  *
  * A chunk's sidecar (`.meta.<index>.json` in the chunk directory) has the same
- * shape, with `createdAt`, `generation` and the stamp members only.
+ * shape, with `createdAt`, `generation`, the stamp members, `contentType`,
+ * `fileName` and `digest` only.
  */
 export interface MetaSidecar {
   createdAt: string
@@ -127,6 +140,7 @@ export interface MetaSidecar {
   deleted?: boolean
   contentType: string
   fileName?: string
+  digest?: string
   feedPosition?: number
 }
 
@@ -224,10 +238,23 @@ export function parseSidecarBytes(bytes: Buffer): MetaSidecar | undefined {
 }
 
 /**
+ * The sidecar members an export archive leaves out, for a Resource's sidecar
+ * and a chunk's alike: the server-local `feedPosition` (a chunk sidecar
+ * carries none, and stripping an absent member is a no-op) and `fileName`,
+ * and the stored `digest`, which the archive's provenance statements carry
+ * instead and which import recomputes over the file it writes. One list, so
+ * a member added here leaves every archive entry kind at once.
+ */
+export const ARCHIVE_STRIPPED_SIDECAR_MEMBERS: ReadonlyArray<
+  keyof MetaSidecar
+> = ['feedPosition', 'fileName', 'digest']
+
+/**
  * Removes members from a Resource sidecar's bytes. Bytes that do not parse as
  * a JSON object, or that carry none of the members, are returned unchanged.
- * Export uses it to strip the server-local `feedPosition` and `fileName`, and
- * import to strip a `createdBy` the archive did not earn.
+ * Export uses it to strip the server-local `feedPosition` and `fileName` and
+ * the stored `digest`, and import to strip a `createdBy` the archive did not
+ * earn.
  * @param options {object}
  * @param options.bytes {Buffer}   the stored sidecar bytes
  * @param options.members {Array<keyof MetaSidecar>}
@@ -275,8 +302,9 @@ export function serializeSidecarWithout({
  * `/meta` generation that is missing, or that this server could not have
  * minted (`isMintedGeneration`), is replaced with a fresh one, and a missing
  * `createdAt` takes the new stamp's time. An archived `meta` that is not a
- * whole stamp object is dropped, and so is an archived `fileName`, which
- * names a file on the exporting server only. Any `feedPosition` is left for
+ * whole stamp object is dropped, and so are an archived `fileName`, which
+ * names a file on the exporting server only, and an archived `digest`, which
+ * the caller records from the bytes it writes. Any `feedPosition` is left for
  * the caller to replace.
  * @param options {object}
  * @param options.sidecar {MetaSidecar}   the archived sidecar
@@ -291,7 +319,12 @@ export async function restampImportedSidecar({
   sidecar: MetaSidecar
   mint: () => Promise<WriteStamp>
 }): Promise<MetaSidecar> {
-  const { meta, fileName: _archived, ...rest } = withoutStampMembers(sidecar)
+  const {
+    meta,
+    fileName: _archivedFileName,
+    digest: _archivedDigest,
+    ...rest
+  } = withoutStampMembers(sidecar)
   const stamp = await mint()
   const restamped: MetaSidecar = {
     ...rest,

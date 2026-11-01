@@ -17,6 +17,7 @@ import {
   writeFile
 } from 'node:fs/promises'
 import pino from 'pino'
+import { chunkDirName } from '@interop/space-archive'
 import { FileSystemBackend } from '../src/backends/filesystem.js'
 import {
   STORE_FILE_NAME,
@@ -391,10 +392,10 @@ describe('Filesystem store version', () => {
     assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
   })
 
-  it('stamps an empty store at the current version, nine, and boots', async () => {
-    assert.equal(STORE_MIGRATIONS.length, 9)
+  it('stamps an empty store at the current version, ten, and boots', async () => {
+    assert.equal(STORE_MIGRATIONS.length, 10)
     const backend = await FileSystemBackend.open({ dataDir })
-    assert.equal(await storedVersion(dataDir), 9)
+    assert.equal(await storedVersion(dataDir), 10)
     assert.match(backend.originId, ORIGIN_ID_PATTERN)
   })
 
@@ -440,10 +441,10 @@ describe('Filesystem store version', () => {
     }
   })
 
-  it('stamps a layout-8 store holding Metadata files under the new names at layout 9', async () => {
+  it('stamps a layout-8 store holding Metadata files under the new names at the current layout', async () => {
     await stageLayout8Metadata('meta.')
     await FileSystemBackend.open({ dataDir })
-    assert.equal(await storedVersion(dataDir), 9)
+    assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
   })
 
   /**
@@ -475,7 +476,7 @@ describe('Filesystem store version', () => {
   it("moves a layout-7 store's revocation trees into the Space dirs and drops the root", async () => {
     const { spaceDir, oldRoot } = await stageLayout7Revocations()
     await FileSystemBackend.open({ dataDir })
-    assert.equal(await storedVersion(dataDir), 9)
+    assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
     assert.deepEqual(await readdir(path.join(spaceDir, '.revocations')), [
       'one.json'
     ])
@@ -490,7 +491,7 @@ describe('Filesystem store version', () => {
     await applyStoreMigrations({ dataDir, logger })
     await stamp(dataDir, 7)
     await FileSystemBackend.open({ dataDir })
-    assert.equal(await storedVersion(dataDir), 9)
+    assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
     assert.deepEqual(await readdir(path.join(spaceDir, '.revocations')), [
       'one.json'
     ])
@@ -528,7 +529,7 @@ describe('Filesystem store version', () => {
     await stamp(dataDir, 7)
     await mkdir(path.join(dataDir, 'spaces', 'some-space'), { recursive: true })
     await FileSystemBackend.open({ dataDir })
-    assert.equal(await storedVersion(dataDir), 9)
+    assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
   })
 
   it('refuses a layout-6 store that holds an unstamped registration file, on every boot', async () => {
@@ -722,7 +723,7 @@ describe('Filesystem store version', () => {
     await mkdir(collectionDir, { recursive: true })
     await writeFile(
       path.join(collectionDir, '.meta.doc.json'),
-      '{"contentType":"application/json","feedPosition":1}'
+      '{"contentType":"application/json","feedPosition":1,"digest":"mh=uEiA"}'
     )
     // A sidecar that does not parse is not a tombstone.
     await writeFile(path.join(collectionDir, '.meta.bad.json'), '{not json')
@@ -741,6 +742,77 @@ describe('Filesystem store version', () => {
     )
     await FileSystemBackend.open({ dataDir })
     assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
+  })
+
+  /**
+   * Stamps the store at layout 9 and stages one Collection holding a live
+   * Resource sidecar, a chunk sidecar under the Resource's chunk dir, and a
+   * Resource tombstone, each with or without a `digest` member.
+   * @param options {object}
+   * @param options.resourceDigest {boolean}
+   * @param options.chunkDigest {boolean}
+   * @returns {Promise<void>}
+   */
+  async function stageLayout9Sidecars({
+    resourceDigest,
+    chunkDigest
+  }: {
+    resourceDigest: boolean
+    chunkDigest: boolean
+  }): Promise<void> {
+    await stamp(dataDir, 9)
+    const collectionDir = path.join(dataDir, 'spaces', 'some-space', 'col')
+    const chunkDir = path.join(collectionDir, chunkDirName('doc'))
+    await mkdir(chunkDir, { recursive: true })
+    const digest = { digest: 'mh=uEiA' }
+    await writeFile(
+      path.join(collectionDir, '.meta.doc.json'),
+      JSON.stringify({
+        contentType: 'application/json',
+        feedPosition: 1,
+        ...(resourceDigest && digest)
+      })
+    )
+    await writeFile(
+      path.join(chunkDir, '.meta.0.json'),
+      JSON.stringify({
+        contentType: 'application/octet-stream',
+        ...(chunkDigest && digest)
+      })
+    )
+    // A tombstone is not held to the member: one an import wrote has none.
+    await writeFile(
+      path.join(collectionDir, '.tombstone.gone.json'),
+      '{"deleted":true,"contentType":"application/json","feedPosition":2}'
+    )
+    // A sidecar that does not parse is not a record.
+    await writeFile(path.join(collectionDir, '.meta.bad.json'), '{not json')
+  }
+
+  it.each([
+    ['a live Resource sidecar', { resourceDigest: false, chunkDigest: true }],
+    ['a chunk sidecar', { resourceDigest: true, chunkDigest: false }]
+  ])(
+    'refuses a layout-9 store holding %s with no digest, on every boot',
+    async (_label, staged) => {
+      await stageLayout9Sidecars(staged)
+      for (let boot = 0; boot < 2; boot++) {
+        await assert.rejects(
+          FileSystemBackend.open({ dataDir }),
+          (err: Error) =>
+            err instanceof StoreVersionError &&
+            err.message.includes('1 live Resource or chunk sidecar(s)') &&
+            err.message.includes('Wipe the data directory')
+        )
+        assert.equal(await storedVersion(dataDir), 9)
+      }
+    }
+  )
+
+  it('stamps a layout-9 store whose live sidecars carry a digest at layout 10, a digestless tombstone included', async () => {
+    await stageLayout9Sidecars({ resourceDigest: true, chunkDigest: true })
+    await FileSystemBackend.open({ dataDir })
+    assert.equal(await storedVersion(dataDir), 10)
   })
 
   it('refuses a store.json with no integer version', async () => {

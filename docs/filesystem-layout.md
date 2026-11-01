@@ -148,6 +148,24 @@ and with no conversion step. The remedy is to wipe the data dir. An empty data
 dir, or one with no such file, is stamped at version 9. Postgres is unchanged:
 it keeps no Metadata files.
 
+### Version 10: the content digest
+
+Every live Resource and chunk sidecar carries `digest`, the content digest of
+its stored representation (the `Digest` header's `mh=` form, see
+`lib/contentDigest.ts`), recorded by the write that stored the bytes, and a
+Resource tombstone carries the digest of the content it replaced. The write-once
+rule compares digests instead of stored bytes, and so holds over a tombstone.
+The step converts nothing. It refuses, with `StoreVersionError`, a data dir
+holding a live Resource or chunk sidecar with no `digest`, counting the sidecars
+it found, on every boot and with no conversion step. A tombstone with no digest
+passes: one holds nothing the rule can compare, so a write over it is an
+ordinary create. The remedy is to wipe the data dir or restore from an archive,
+whose import digests each file it writes. An empty data dir, or one with no such
+sidecar, is stamped at version 10. The Postgres twin is schema migration 16,
+which adds a `digest` column to `resources` (nullable, for the same tombstones),
+`chunks` and `chunk_staging`, and refuses a schema holding a live Resource,
+chunk or staged chunk row.
+
 ## The origin id and the clock mark
 
 `store.json` also carries the store's origin id as its `originId` member (see
@@ -196,7 +214,10 @@ the write created as `fileName`. Reads and writes open that name, with no
 directory listing and no re-derivation from `contentType`, so a change in how
 `fileNameFor` derives a name cannot strand a stored file. A representation file
 no sidecar names is not a Resource. `fileName` is server-local: a tombstone has
-none, export strips it, and import records the file it writes.
+none, export strips it, and import records the file it writes. The sidecar also
+carries `digest`, the content digest of the stored file, recorded in the same
+critical section as the stamp; a tombstone keeps the deleted content's. Export
+strips it too, and import records the digest of the file it writes.
 
 ### Resource tombstones
 

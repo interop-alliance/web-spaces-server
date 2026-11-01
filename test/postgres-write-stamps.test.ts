@@ -24,7 +24,9 @@ import { MIGRATIONS } from '../src/backends/postgresSchema.js'
 import { StoreVersionError } from '../src/errors.js'
 import { compareStamps, readingOfStamp } from '../src/lib/hlc.js'
 import { etagOf, formatEtag } from '../src/lib/etag.js'
-import { openTempPostgres, postgresAdminQuery } from './helpers.js'
+import { binaryInput, openTempPostgres, postgresAdminQuery } from './helpers.js'
+import { createHeaderValue } from '@interop/http-digest-header'
+import { ResourceImmutableError } from '../src/errors.js'
 import { frozenClock } from '../src/testing.js'
 
 const connectionString = process.env.WAS_TEST_DATABASE_URL
@@ -51,6 +53,12 @@ const POLICY_STAMP_VERSION = 12
  * The schema version that added the replica registration stamp columns.
  */
 const REPLICA_STAMP_VERSION = 15
+
+/**
+ * The schema version that added the `digest` column to `resources`, `chunks`
+ * and `chunk_staging`.
+ */
+const DIGEST_VERSION = 16
 
 if (!connectionString) {
   describe('PostgresBackend write stamps', () => {
@@ -489,6 +497,7 @@ if (!connectionString) {
      * @returns {Promise<void>}
      */
     async function rollBackPolicyStamps(): Promise<void> {
+      await dropDigestColumns()
       await postgresAdminQuery(
         `ALTER TABLE "${schema}".policies
            DROP COLUMN deleted,
@@ -534,6 +543,7 @@ if (!connectionString) {
      * @returns {Promise<void>}
      */
     async function rollBackReplicaStamps(): Promise<void> {
+      await dropDigestColumns()
       await postgresAdminQuery(
         `ALTER TABLE "${schema}".replicas
            DROP COLUMN updated_at,
@@ -577,6 +587,169 @@ if (!connectionString) {
       const rebooted = await boot()
       assert.equal(await storedSchemaVersion(), MIGRATIONS.length)
       assert.deepEqual(await rebooted.listAllReplicas(), [])
+    })
+
+    /**
+     * Drops the `digest` columns the v16 step adds, as every schema before
+     * it stood. Each rollback to an earlier version drops them first.
+     * @returns {Promise<void>}
+     */
+    async function dropDigestColumns(): Promise<void> {
+      await postgresAdminQuery(
+        `ALTER TABLE "${schema}".resources DROP COLUMN digest;
+         ALTER TABLE "${schema}".chunks DROP COLUMN digest;
+         ALTER TABLE "${schema}".chunk_staging DROP COLUMN digest`
+      )
+    }
+
+    /**
+     * Rolls the schema back to the version before content digests, as a
+     * build from before them left it.
+     * @returns {Promise<void>}
+     */
+    async function rollBackDigests(): Promise<void> {
+      await dropDigestColumns()
+      await postgresAdminQuery(
+        `DELETE FROM "${schema}".schema_migrations WHERE version >= $1`,
+        [DIGEST_VERSION]
+      )
+    }
+
+    it('refuses a pre-digest schema that holds a live Resource, on every boot', async () => {
+      const backend = await boot()
+      await provision(backend)
+      await backend.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: { kind: 'json', contentType: 'application/json', data: { a: 1 } }
+      })
+      await backend.close()
+      backends.splice(backends.indexOf(backend), 1)
+      await rollBackDigests()
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await assert.rejects(
+          PostgresBackend.open({ connectionString: connectionString!, schema }),
+          (err: unknown) =>
+            err instanceof StoreVersionError &&
+            err.message.includes(
+              '1 live Resource, chunk or staged chunk row(s)'
+            )
+        )
+        assert.equal(await storedSchemaVersion(), DIGEST_VERSION - 1)
+      }
+    })
+
+    it('reshapes a pre-digest schema holding only a tombstone, which then admits a create on a write-once Collection', async () => {
+      const backend = await boot()
+      await provision(backend)
+      await backend.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: { kind: 'json', contentType: 'application/json', data: { a: 1 } }
+      })
+      await backend.deleteResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc'
+      })
+      await backend.close()
+      backends.splice(backends.indexOf(backend), 1)
+      await rollBackDigests()
+
+      const rebooted = await boot()
+      assert.equal(await storedSchemaVersion(), MIGRATIONS.length)
+      const { rows } = await postgresAdminQuery(
+        `SELECT digest FROM "${schema}".resources WHERE resource_id = 'doc'`
+      )
+      assert.equal(rows[0]!.digest, null)
+      // A tombstone with no digest holds nothing the write-once rule can
+      // compare, so a write over it is an ordinary create.
+      const { created } = await rebooted.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: {
+          kind: 'json',
+          contentType: 'application/json',
+          data: { a: 2 }
+        },
+        immutable: true
+      })
+      assert.equal(created, true)
+    })
+
+    it('records the content digest of each Resource and chunk, and a tombstone keeps it', async () => {
+      const backend = await boot()
+      await provision(backend)
+      const digestOf = async (resourceId: string): Promise<string | null> => {
+        const { rows } = await postgresAdminQuery(
+          `SELECT digest FROM "${schema}".resources WHERE resource_id = $1`,
+          [resourceId]
+        )
+        return rows[0]!.digest as string | null
+      }
+      // A JSON body is digested as stored, after re-serialization.
+      await backend.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: {
+          kind: 'json',
+          contentType: 'application/json',
+          data: { b: [1, 2], a: 'x' }
+        }
+      })
+      assert.equal(
+        await digestOf('doc'),
+        await createHeaderValue({ data: Buffer.from('{"b":[1,2],"a":"x"}') })
+      )
+      // A binary body is digested as sent.
+      const bytes = Buffer.from('some binary bytes')
+      await backend.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'blob',
+        input: binaryInput(bytes)
+      })
+      const blobDigest = await createHeaderValue({ data: bytes })
+      assert.equal(await digestOf('blob'), blobDigest)
+      // A chunk records its own digest; nothing is written on the parent.
+      const chunkBytes = Buffer.from('chunk zero')
+      await backend.writeChunk({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'blob',
+        chunkIndex: 0,
+        input: binaryInput(chunkBytes)
+      })
+      const { rows: chunkRows } = await postgresAdminQuery(
+        `SELECT digest FROM "${schema}".chunks WHERE resource_id = 'blob'`
+      )
+      assert.equal(
+        chunkRows[0]!.digest,
+        await createHeaderValue({ data: chunkBytes })
+      )
+      assert.equal(await digestOf('blob'), blobDigest)
+      // A soft delete keeps the deleted content's digest on the tombstone,
+      // which the write-once rule compares a write over it with.
+      await backend.deleteResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'blob'
+      })
+      assert.equal(await digestOf('blob'), blobDigest)
+      await assert.rejects(
+        backend.writeResource({
+          spaceId: 'space1',
+          collectionId: 'notes',
+          resourceId: 'blob',
+          input: binaryInput(Buffer.from('other bytes')),
+          immutable: true
+        }),
+        ResourceImmutableError
+      )
     })
 
     it('reshapes a pre-policy-stamp schema with no policy, and boots', async () => {

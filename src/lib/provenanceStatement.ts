@@ -6,10 +6,8 @@
  * sides read the server-managed members off an archived JSON dot-file the
  * same way, digest a file's bytes in the `Digest` header's `mh=` form, and
  * digest a chunked Resource as the JCS serialization of its chunk digests in
- * chunk index order.
+ * chunk index order (the forms `lib/contentDigest.ts` defines).
  */
-import { createHeaderValue } from '@interop/http-digest-header'
-import { createSignCryptosuite } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import {
   classifyCollectionFile,
   parseChunkIndexSegment
@@ -18,6 +16,7 @@ import type { ArchiveEntry, ArchiveFile } from '@interop/space-archive'
 import { isMetaStamp } from '@interop/storage-core'
 import type { ResourceMetaStamp } from '../types.js'
 import { isEnoent } from './atomicFile.js'
+import { compositeChunkDigest, contentDigestOf } from './contentDigest.js'
 import { isPlainObject } from './isPlainObject.js'
 
 /**
@@ -169,15 +168,15 @@ export async function fileDigest(
   file: ArchiveFile
 ): Promise<string | undefined> {
   const bytes = await fileBytes(file)
-  return bytes === undefined ? undefined : createHeaderValue({ data: bytes })
+  return bytes === undefined ? undefined : contentDigestOf(bytes)
 }
 
 /**
- * The composite digest of a chunked Resource: each chunk representation's
- * digest, in chunk index order, serialized with JCS, and that serialization
- * digested in the same `mh=` form. A chunk directory's metadata sidecars are
- * not content and are skipped. Returns `undefined` when any chunk is gone.
- * Export signs it, and import recomputes it over the chunk files it restores.
+ * The composite digest of a chunked Resource (`compositeChunkDigest`) over
+ * the chunk representations of an archived chunk directory, in chunk index
+ * order. The directory's metadata sidecars are not content and are skipped.
+ * Returns `undefined` when any chunk is gone. Export signs it, and import
+ * recomputes it over the chunk files it restores.
  * @param chunkFiles {ArchiveEntry[]}   the chunk directory's entries
  * @returns {Promise<string | undefined>}
  */
@@ -207,6 +206,5 @@ export async function chunkedDigest(
     }
     digests.push(digest)
   }
-  const serialized = await createSignCryptosuite().canonize(digests)
-  return createHeaderValue({ data: serialized })
+  return compositeChunkDigest(digests)
 }

@@ -8,7 +8,6 @@ import path from 'node:path'
 import { mkdir, readFile, rm, stat as fsStat } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { Readable, Transform, Writable } from 'node:stream'
 import fs from 'node:fs'
@@ -68,6 +67,7 @@ import {
 } from '@interop/space-archive'
 import type { ArchiveEntry } from '@interop/space-archive'
 import {
+  ARCHIVE_STRIPPED_SIDECAR_MEMBERS,
   newerSidecar,
   parseSidecarBytes,
   restampImportedSidecar,
@@ -77,6 +77,12 @@ import {
   withoutSidecarMembers
 } from '../lib/metaSidecar.js'
 import type { MetaSidecar } from '../lib/metaSidecar.js'
+import {
+  contentDigestOf,
+  digestTap,
+  storedJsonBytes,
+  streamDigestOf
+} from '../lib/contentDigest.js'
 import {
   sanitizeBackendRecord,
   serverBackendDescriptor
@@ -440,35 +446,6 @@ async function openFileStream(
 }
 
 /**
- * The SHA-256 digest of a byte stream, read through `guards` (the upload cap
- * for an incoming body), so a body a write would refuse is refused here too.
- * @param options {object}
- * @param options.stream {Readable}
- * @param [options.guards] {Transform[]}   byte-limit transforms to read the
- *   stream through
- * @returns {Promise<Buffer>}
- */
-async function digestOfStream({
-  stream,
-  guards = []
-}: {
-  stream: Readable
-  guards?: Transform[]
-}): Promise<Buffer> {
-  const hash = createHash('sha256')
-  await pipeline([
-    stream,
-    ...guards,
-    async function digestChunks(source: AsyncIterable<Buffer>) {
-      for await (const chunk of source) {
-        hash.update(chunk)
-      }
-    }
-  ])
-  return hash.digest()
-}
-
-/**
  * The epoch as an `updatedAt` value: the time of a stand-in stamp that sorts
  * below every stamp a clock mints.
  */
@@ -529,6 +506,32 @@ function sidecarFileMembers(filePath: string): {
 }
 
 /**
+ * The stored record the write-once rule compares a write with, else
+ * `undefined`. Every live Resource or chunk is held: one with no `digest` (a
+ * damaged sidecar) is compared through a digest of its stored file, so the
+ * rule never lapses over a live record. A Resource tombstone is held when it
+ * carries a content digest and a validator. One with no digest (a tombstone an
+ * import or a replica apply wrote with no bytes to digest) holds nothing to
+ * compare, and one with no validator would leave a repeat over it nothing to
+ * answer, so a write over either creates the Resource.
+ * @param sidecar {MetaSidecar | undefined}
+ * @returns {MetaSidecar | undefined}
+ */
+function heldForWriteOnce(
+  sidecar: MetaSidecar | undefined
+): MetaSidecar | undefined {
+  if (
+    sidecar === undefined ||
+    (sidecar.deleted === true &&
+      (sidecar.digest === undefined ||
+        validatorOf({ ...sidecar }) === undefined))
+  ) {
+    return undefined
+  }
+  return sidecar
+}
+
+/**
  * Prefix of a Resource's chunk staging directory
  * (`.staging.chunks.<encodedResourceId>/`), beside its chunk directory in the
  * Collection dir: the chunk directory's name (`chunkDirName`) behind
@@ -573,14 +576,16 @@ function stagingRunDirName(parentEtag: string): string {
 /**
  * What a staged chunk's sidecar (`.meta.<index>.json` in its run directory)
  * records: the type its file name carries, its size, the source server's
- * `ETag` it was read under (opaque), and the staged file's basename. It
- * carries no stamp or generation: the swap mints both.
+ * `ETag` it was read under (opaque), the staged file's basename, and the
+ * content digest of the staged bytes, which the swap records on the live
+ * chunk's sidecar. It carries no stamp or generation: the swap mints both.
  */
 type StagedChunkSidecar = {
   contentType: string
   size: number
   peerEtag: string
   fileName: string
+  digest: string
 }
 
 /**
@@ -593,7 +598,7 @@ function stagedChunkSidecarOf(value: unknown): StagedChunkSidecar | undefined {
   if (!isPlainObject(value)) {
     return undefined
   }
-  const { contentType, size, peerEtag, fileName } = value
+  const { contentType, size, peerEtag, fileName, digest } = value
   if (
     typeof contentType !== 'string' ||
     !Number.isSafeInteger(size) ||
@@ -601,11 +606,12 @@ function stagedChunkSidecarOf(value: unknown): StagedChunkSidecar | undefined {
     typeof peerEtag !== 'string' ||
     typeof fileName !== 'string' ||
     path.basename(fileName) !== fileName ||
-    !isRepresentationFileName(fileName)
+    !isRepresentationFileName(fileName) ||
+    typeof digest !== 'string'
   ) {
     return undefined
   }
-  return { contentType, size: size as number, peerEtag, fileName }
+  return { contentType, size: size as number, peerEtag, fileName, digest }
 }
 
 /**
@@ -719,9 +725,10 @@ function carriedSidecarMembers({
  * The sidecar of a live Resource content record an apply stored, as the
  * origin's write set it: its `createdAt` (the stamp's `updatedAt` when the
  * record carried none), stamp, `createdBy` and generation, the members
- * carried from the held live record (`carriedSidecarMembers`), and the
- * file just written with the type its name carries (`sidecarFileMembers`).
- * The plain apply and the chunk swap's manifest both record it.
+ * carried from the held live record (`carriedSidecarMembers`), the file
+ * just written with the type its name carries (`sidecarFileMembers`), and
+ * the content digest of the bytes written. The plain apply and the chunk
+ * swap's manifest both record it.
  * @param options {object}
  * @param options.stamp {WriteStamp}
  * @param options.generation {string}
@@ -731,6 +738,7 @@ function carriedSidecarMembers({
  * @param [options.epoch] {string}
  * @param [options.prior] {MetaSidecar}   the held sidecar
  * @param options.filePath {string}   the representation file written
+ * @param options.digest {string}   the content digest of the bytes written
  * @returns {MetaSidecar}
  */
 function appliedLiveSidecar({
@@ -741,7 +749,8 @@ function appliedLiveSidecar({
   writerId,
   epoch,
   prior,
-  filePath
+  filePath,
+  digest
 }: {
   stamp: WriteStamp
   generation: string
@@ -751,6 +760,7 @@ function appliedLiveSidecar({
   epoch?: string
   prior?: MetaSidecar
   filePath: string
+  digest: string
 }): MetaSidecar {
   return {
     createdAt: createdAt ?? stamp.updatedAt,
@@ -758,6 +768,7 @@ function appliedLiveSidecar({
     ...(createdBy !== undefined && { createdBy }),
     generation,
     ...carriedSidecarMembers({ prior, epoch, writerId }),
+    digest,
     ...sidecarFileMembers(filePath)
   }
 }
@@ -1846,7 +1857,8 @@ export class FileSystemBackend implements StorageBackend {
    * What an export keeps of a directory listing, a Collection dir's or a
    * chunk dir's: every file but a representation file no live sidecar names
    * (`#judgeRepresentations`), and for each sidecar file a reader that
-   * strips the server-local `members`. A sidecar read to judge a file
+   * strips the members an archive leaves out
+   * (`ARCHIVE_STRIPPED_SIDECAR_MEMBERS`). A sidecar read to judge a file
    * travels as the object it was read as, so it is read once. Any other
    * sidecar (a tombstone's) is read at pack time.
    *
@@ -1859,20 +1871,16 @@ export class FileSystemBackend implements StorageBackend {
    * @param options {object}
    * @param options.dir {string}
    * @param options.entries {fs.Dirent[]}   that dir's listing
-   * @param options.members {ReadonlyArray<keyof MetaSidecar>}   the sidecar
-   *   members left out of the archive
    * @returns {Promise<{ keeps: (child: fs.Dirent) => boolean,
    *   archiveName: (fileName: string) => string,
    *   sidecarReader: (fileName: string) => (() => Promise<Buffer>) | undefined }>}
    */
   async #exportableFiles({
     dir,
-    entries,
-    members
+    entries
   }: {
     dir: string
     entries: fs.Dirent[]
-    members: ReadonlyArray<keyof MetaSidecar>
   }): Promise<{
     keeps: (child: fs.Dirent) => boolean
     archiveName: (fileName: string) => string
@@ -1925,12 +1933,16 @@ export class FileSystemBackend implements StorageBackend {
         }
         const sidecar = sidecars.get(sidecarId)
         if (sidecar !== undefined) {
-          return async () => serializeSidecarWithout({ sidecar, members })
+          return async () =>
+            serializeSidecarWithout({
+              sidecar,
+              members: ARCHIVE_STRIPPED_SIDECAR_MEMBERS
+            })
         }
         return async () =>
           withoutSidecarMembers({
             bytes: await fs.promises.readFile(path.join(dir, fileName)),
-            members
+            members: ARCHIVE_STRIPPED_SIDECAR_MEMBERS
           })
       }
     }
@@ -2300,7 +2312,9 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.collectionDir {string}
    * @param options.resourceId {string}
    * @param [options.prior] {MetaSidecar}   the sidecar the write read
-   * @param options.keepPath {string}   the file the new sidecar names
+   * @param [options.keepPath] {string}   the file the new sidecar names;
+   *   absent for a write-once repeat over the tombstone, which commits no
+   *   file and leaves the tombstone standing
    * @returns {Promise<void>}
    */
   async #reclaimBesideTombstone({
@@ -2312,7 +2326,7 @@ export class FileSystemBackend implements StorageBackend {
     collectionDir: string
     resourceId: string
     prior?: MetaSidecar
-    keepPath: string
+    keepPath?: string
   }): Promise<void> {
     if (prior?.deleted !== true) {
       return
@@ -2320,7 +2334,7 @@ export class FileSystemBackend implements StorageBackend {
     await this.#removeRepresentationFilesOf({
       dir: collectionDir,
       resourceId,
-      keep: path.basename(keepPath)
+      ...(keepPath !== undefined && { keep: path.basename(keepPath) })
     })
   }
 
@@ -3004,8 +3018,7 @@ export class FileSystemBackend implements StorageBackend {
         // imported as a Resource.
         const exportable = await this.#exportableFiles({
           dir: entryPath,
-          entries: collectionEntries,
-          members: ['feedPosition', 'fileName']
+          entries: collectionEntries
         })
         const files: ArchiveEntry[] = collectionEntries
           .filter(
@@ -3050,11 +3063,11 @@ export class FileSystemBackend implements StorageBackend {
             withFileTypes: true
           })
           // A chunk sidecar's `fileName` is server-local, as a Resource's
-          // is, and a chunk file travels under the same rule.
+          // is, its `digest` stays here as a Resource's does, and a chunk
+          // file travels under the same rule.
           const exportable = await this.#exportableFiles({
             dir: chunkDir,
-            entries: chunkEntries,
-            members: ['fileName']
+            entries: chunkEntries
           })
           const chunkFiles = chunkEntries
             .filter(child => exportable.keeps(child))
@@ -3427,9 +3440,10 @@ export class FileSystemBackend implements StorageBackend {
                   // as a first write builds it (`createdAt` now, a new
                   // generation and stamp, no `createdBy`), so every imported
                   // Resource is served with a validator and appears in the
-                  // changes feed. Its `contentType` and `fileName` are taken
-                  // from the file just written, whatever the archived sidecar
-                  // carries, so the sidecar names the file on this server.
+                  // changes feed. Its `contentType`, `fileName` and `digest`
+                  // are taken from the file just written, whatever the
+                  // archived sidecar carries, so the sidecar names and digests
+                  // the file on this server.
                   const metadataBytes = resourceMetadata.get(resourceId)
                   await this.#importFileSidecar({
                     collectionDir,
@@ -3437,6 +3451,7 @@ export class FileSystemBackend implements StorageBackend {
                     archived: metadataBytes && parseSidecarBytes(metadataBytes),
                     contentType: parseResourceFileName(fileName).contentType,
                     fileName,
+                    body,
                     feed: { spaceId, collectionId }
                   })
                   return true
@@ -3605,14 +3620,15 @@ export class FileSystemBackend implements StorageBackend {
                   )
                   const archivedSidecar =
                     sidecarBytes && parseSidecarBytes(sidecarBytes)
-                  // The chunk's `contentType` and `fileName` come from the file
-                  // just written, as a Resource's do.
+                  // The chunk's `contentType`, `fileName` and `digest` come
+                  // from the file just written, as a Resource's do.
                   await this.#importFileSidecar({
                     collectionDir: chunkDir,
                     resourceId: chunkId,
                     archived: archivedSidecar,
                     contentType,
-                    fileName
+                    fileName,
+                    body
                   })
                   if (archivedSidecar) {
                     bytesWritten += sidecarBytes!.length
@@ -4887,10 +4903,14 @@ export class FileSystemBackend implements StorageBackend {
     // sidecar of that live Resource is the only prior provenance it keeps.
     const livePrior = live?.sidecar
 
-    // The write-once rule binds a write over a live Resource only. A
-    // tombstone keeps no bytes, so a write over one is an ordinary create.
+    // The write-once rule binds a write over a live Resource, and a write
+    // over a tombstone that kept the deleted content's digest. A tombstone
+    // with no digest (one an import or a replica apply wrote with no bytes to
+    // digest) holds nothing to compare, so a write over it is an ordinary
+    // create.
+    const held = heldForWriteOnce(prior)
     const writeOnce =
-      live !== undefined &&
+      held !== undefined &&
       (await this.#isWriteOnce({
         spaceId,
         collectionId,
@@ -4918,33 +4938,49 @@ export class FileSystemBackend implements StorageBackend {
       })
     }
 
-    // A write-once Collection: over a live Resource, only a repeat of the
-    // stored bytes passes, and it writes nothing. A live sidecar that carries
-    // no stamp is damaged, and the repeat repairs it: the bytes stay, and the
-    // sidecar is stamped below.
+    // A write-once Collection: over a live Resource or a tombstone, only a
+    // repeat of the stored digest passes, and it writes nothing. Over a
+    // tombstone the repeat answers the tombstone's validator and the Resource
+    // stays deleted; it is also the only write the id takes again, so it
+    // reclaims a file a delete cut short left beside the tombstone, which a
+    // create would otherwise reclaim. A live sidecar that carries no stamp is
+    // damaged, and the repeat repairs it: the bytes stay, and the sidecar is
+    // stamped below.
+    let digest: string
     if (writeOnce) {
-      const stored = await this.#answerImmutableRepeat({
-        filePath: live.filePath,
-        sidecar: live.sidecar,
+      const repeat = await this.#answerImmutableRepeat({
+        sidecar: held,
+        filePath: live?.filePath,
         input,
         requestName: 'Write Resource'
       })
-      if (stored !== undefined) {
+      digest = repeat.digest
+      if (repeat.validator !== undefined) {
+        await this.#reclaimBesideTombstone({
+          collectionDir,
+          resourceId,
+          prior
+        })
         return {
-          validator: stored,
+          validator: repeat.validator,
           created: false,
           members: await this.#writtenMembers({
-            filePath: live.filePath,
-            sidecar: live.sidecar
+            filePath: live?.filePath,
+            sidecar: held
           })
         }
       }
     } else {
-      await this.#writeRepresentationBytes({ spaceId, filePath, input })
+      digest = await this.#writeRepresentationBytes({
+        spaceId,
+        filePath,
+        input
+      })
     }
     // A write-once repeat wrote no bytes, so the stored file is the live one,
-    // whose name may carry other media type parameters.
-    const storedPath = writeOnce ? live.filePath : filePath
+    // whose name may carry other media type parameters. A tombstone with a
+    // validator never reaches here: its repeat was answered above.
+    const storedPath = writeOnce ? live!.filePath : filePath
 
     // The sidecar is the write's commit point: it is written after the new
     // representation is in place and before any prior one is pruned, and it
@@ -4986,8 +5022,9 @@ export class FileSystemBackend implements StorageBackend {
           ...(prior?.custom && { custom: prior.custom }),
           // The stored file's name, which a read opens, and the type it
           // carries. A write-once repeat wrote no bytes, so both are read off
-          // the live file (`storedPath`).
+          // the live file (`storedPath`), and its digest is the stored one.
           ...sidecarFileMembers(storedPath),
+          digest,
           // The key-epoch stamp is set from this write's declaration and CLEARED
           // when absent (the new ciphertext's epoch is unknown -- a stale stamp
           // is worse than none), so it is NOT preserved from `prior` like
@@ -5028,9 +5065,10 @@ export class FileSystemBackend implements StorageBackend {
    * The server-managed members of a Resource Metadata object as a write
    * left them, read under the write's lock: the media type the stored file
    * name carries, the stored file's size, and the sidecar's provenance and
-   * stamps.
+   * stamps. A write-once repeat over a tombstone names no file: it answers
+   * the tombstone's media type and a size of 0.
    * @param options {object}
-   * @param options.filePath {string}   the live representation file
+   * @param [options.filePath] {string}   the live representation file
    * @param options.sidecar {MetaSidecar}   its sidecar as the write left it
    * @returns {Promise<ResourceWriteMembers>}
    */
@@ -5038,11 +5076,17 @@ export class FileSystemBackend implements StorageBackend {
     filePath,
     sidecar
   }: {
-    filePath: string
+    filePath?: string
     sidecar: MetaSidecar
   }): Promise<ResourceWriteMembers> {
-    const { contentType } = parseResourceFileName(path.basename(filePath))
-    const { size } = await fsStat(filePath)
+    const { contentType, size } =
+      filePath === undefined
+        ? { contentType: sidecar.contentType, size: 0 }
+        : {
+            contentType: parseResourceFileName(path.basename(filePath))
+              .contentType,
+            size: (await fsStat(filePath)).size
+          }
     return {
       contentType,
       size,
@@ -5085,82 +5129,95 @@ export class FileSystemBackend implements StorageBackend {
   }
 
   /**
-   * The write-once rule over a live representation (a Resource, or a chunk
-   * inside its chunk dir), run under the item's lock: a write whose media
-   * type and bytes equal the stored representation answers the stored
-   * validator and writes nothing, and any other write is refused with
-   * `ResourceImmutableError` (409). Resolves `undefined` for a repeat of a
-   * representation whose sidecar carries no validator (a damaged sidecar),
-   * which the caller answers by stamping one.
+   * The write-once rule over a stored record (a live Resource, a chunk inside
+   * its chunk dir, or a Resource tombstone that kept its digest), run under
+   * the item's lock: a write whose media type and content digest equal the
+   * record's answers the record's validator and writes nothing, and any other
+   * write is refused with `ResourceImmutableError` (409). The incoming body
+   * is digested as a write would store it, through the upload cap. Over a
+   * live record the stored file's size is compared first, so a body of
+   * another length is refused before it is read. No stored bytes are read
+   * unless the live sidecar carries no `digest` (a damaged sidecar), which is
+   * compared through a digest of the stored file instead. The resolved
+   * `validator` is `undefined` for a repeat over a live record whose sidecar
+   * carries no validator, which the caller answers by stamping one, with the
+   * resolved `digest`.
    * @param options {object}
-   * @param options.filePath {string}   the live representation file
-   * @param [options.sidecar] {MetaSidecar}   its stamp sidecar
+   * @param options.sidecar {MetaSidecar}   the record's sidecar
+   * @param [options.filePath] {string}   the live record's stored file,
+   *   absent over a tombstone
    * @param options.input {ResourceInput}
    * @param options.requestName {string}   names the refused operation
-   * @returns {Promise<EtagValidator | undefined>}
+   * @returns {Promise<{ validator: EtagValidator | undefined, digest: string }>}
    */
   async #answerImmutableRepeat({
-    filePath,
     sidecar,
+    filePath,
     input,
     requestName
   }: {
-    filePath: string
-    sidecar?: MetaSidecar
+    sidecar: MetaSidecar
+    filePath?: string
     input: ResourceInput
     requestName: string
-  }): Promise<EtagValidator | undefined> {
-    if (!(await this.#repeatsStoredRepresentation({ filePath, input }))) {
+  }): Promise<{ validator: EtagValidator | undefined; digest: string }> {
+    if (!sameMediaType(sidecar.contentType, input.contentType)) {
       throw new ResourceImmutableError({ requestName })
     }
-    return validatorOf({ ...sidecar })
+    const storedBytes =
+      filePath === undefined ? undefined : (await fsStat(filePath)).size
+    const incoming = await this.#inputDigest({ input, storedBytes })
+    // `heldForWriteOnce` holds a tombstone only with its digest, so a record
+    // with none is live and `filePath` names its file.
+    const digest =
+      sidecar.digest ??
+      (await streamDigestOf({ stream: fs.createReadStream(filePath!) }))
+    if (incoming !== digest) {
+      throw new ResourceImmutableError({ requestName })
+    }
+    return { validator: validatorOf({ ...sidecar }), digest }
   }
 
   /**
-   * Whether a write repeats the stored representation: the same media type
-   * and the same bytes. The upload cap is applied as a write would apply it,
-   * so an over-cap body is a 413 here too. The stored size is compared first,
-   * so a body of another length is answered without reading either side. A
-   * JSON body is compared as the `JSON.stringify` serialization a write
-   * stores. A binary body is digested through the upload cap.
+   * The content digest a write of `input` would record: a JSON body as the
+   * serialization a write stores, a binary body as read through the upload
+   * cap, so an over-cap body is a 413 here as it would be on a write. Given
+   * the stored size, a body of another length (a JSON body's serialized
+   * length, a binary body's declared size) is answered `undefined` without
+   * being read.
    * @param options {object}
-   * @param options.filePath {string}   the live representation file
    * @param options.input {ResourceInput}
-   * @returns {Promise<boolean>}
+   * @param [options.storedBytes] {number}   the stored file's size
+   * @returns {Promise<string | undefined>}
    */
-  async #repeatsStoredRepresentation({
-    filePath,
-    input
+  async #inputDigest({
+    input,
+    storedBytes
   }: {
-    filePath: string
     input: ResourceInput
-  }): Promise<boolean> {
-    const { contentType } = parseResourceFileName(path.basename(filePath))
-    if (!sameMediaType(contentType, input.contentType)) {
-      return false
-    }
+    storedBytes?: number
+  }): Promise<string | undefined> {
     const { maxUploadBytes } = this
-    const { size: storedBytes } = await fsStat(filePath)
     if (input.kind === 'json') {
-      const serialized = Buffer.from(JSON.stringify(input.data))
+      const serialized = storedJsonBytes(input.data)
       this.#assertUploadSize({ maxUploadBytes, uploadBytes: serialized.length })
-      return (
-        serialized.length === storedBytes &&
-        serialized.equals(await readFile(filePath))
-      )
+      if (storedBytes !== undefined && serialized.length !== storedBytes) {
+        return undefined
+      }
+      return contentDigestOf(serialized)
     }
     this.#assertUploadSize({ maxUploadBytes, uploadBytes: input.declaredBytes })
     if (
+      storedBytes !== undefined &&
       input.declaredBytes !== undefined &&
       input.declaredBytes !== storedBytes
     ) {
-      return false
+      return undefined
     }
-    const [incoming, stored] = await Promise.all([
-      digestOfStream({ stream: input.stream, guards: this.#uploadCapGuards() }),
-      digestOfStream({ stream: fs.createReadStream(filePath) })
-    ])
-    return incoming.equals(stored)
+    return streamDigestOf({
+      stream: input.stream,
+      guards: this.#uploadCapGuards()
+    })
   }
 
   /**
@@ -5196,7 +5253,10 @@ export class FileSystemBackend implements StorageBackend {
    * fsync), removing the partial file on any failure. Shared by the Resource
    * write path (`#writeResourceLocked`) and the chunk write path
    * (`#writeChunkLocked`); the caller has already resolved `filePath` and ensured
-   * its parent directory exists for the streamed case.
+   * its parent directory exists for the streamed case. Resolves the content
+   * digest of the bytes written, which the caller records on the sidecar: a
+   * JSON body's over its serialization, a binary body's taken as the bytes
+   * flow into the file.
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.filePath {string}   absolute path of the representation file
@@ -5204,7 +5264,7 @@ export class FileSystemBackend implements StorageBackend {
    * @param [options.creditBytes] {number}   bytes the write frees later, which
    *   the Space headroom check counts as free (a staged chunk credits the
    *   live chunk its swap replaces)
-   * @returns {Promise<void>}
+   * @returns {Promise<string>}   the content digest of the stored bytes
    */
   async #writeRepresentationBytes({
     spaceId,
@@ -5216,16 +5276,17 @@ export class FileSystemBackend implements StorageBackend {
     filePath: string
     input: ResourceInput
     creditBytes?: number
-  }): Promise<void> {
+  }): Promise<string> {
     const { capacityBytes, maxUploadBytes } = this
 
     if (input.kind === 'json') {
       // JSON bodies are fully in memory, so their serialized size is known up
       // front and the pre-flight checks alone suffice (no streaming guard). The
       // per-upload cap (413) is checked before the cumulative quota (507).
-      // Serialize once and reuse for both the size pre-flight and the write.
-      const serialized = JSON.stringify(input.data)
-      const incomingBytes = Buffer.byteLength(serialized)
+      // Serialize once and reuse for the size pre-flight, the digest and the
+      // write.
+      const serialized = storedJsonBytes(input.data)
+      const incomingBytes = serialized.length
       this.#assertUploadSize({ maxUploadBytes, uploadBytes: incomingBytes })
       let releaseByteReservation: (() => void) | undefined
       if (capacityBytes !== undefined) {
@@ -5254,6 +5315,7 @@ export class FileSystemBackend implements StorageBackend {
         releaseByteReservation?.()
         throw err
       }
+      return contentDigestOf(serialized)
     } else {
       this.logger.info('Writing blob')
       // Pre-flight the declared size (when present) against the per-upload cap,
@@ -5294,10 +5356,14 @@ export class FileSystemBackend implements StorageBackend {
       // representation under the resource's name if the process crashed
       // mid-stream; staging + rename makes the resource appear only whole.
       const tempPath = tempPathFor(filePath)
+      // The digest is taken as the bytes flow into the file, after the
+      // guards, so it covers exactly what the file received.
+      const { tap, digest } = digestTap()
       try {
         await pipeline([
           input.stream,
           ...guards,
+          tap,
           fs.createWriteStream(tempPath)
         ])
         // Correct the reservation to the size actually written BEFORE the
@@ -5308,6 +5374,7 @@ export class FileSystemBackend implements StorageBackend {
           reconcileByteReservation((await fsStat(tempPath)).size)
         }
         await commitTempFile({ tempPath, filePath })
+        return await digest
       } catch (err) {
         // Remove the partial file on ANY failure: a guard rejection (413/507),
         // an aborted upload, or a streamed `Digest` mismatch (the request layer
@@ -5396,8 +5463,9 @@ export class FileSystemBackend implements StorageBackend {
    * archived sidecar is re-stamped by this store's clock (its archived stamps
    * are read for provenance only). With none, a fresh one is built as a first
    * write builds it (`createdAt` now, a new generation and stamp, no
-   * `createdBy`). Either way its `contentType` and `fileName` are the file's,
-   * so the sidecar names the file on this server.
+   * `createdBy`). Either way its `contentType`, `fileName` and `digest` are
+   * the file's, so the sidecar names and digests the file on this server,
+   * whatever the archived sidecar carries.
    * @param options {object}
    * @param options.collectionDir {string}   the dir the file lives in (a
    *   Collection dir, or a chunk dir for a chunk)
@@ -5406,6 +5474,7 @@ export class FileSystemBackend implements StorageBackend {
    *   archive carries one that is a JSON object
    * @param options.contentType {string}   the type the stored file name carries
    * @param options.fileName {string}   the stored file's basename
+   * @param options.body {Buffer}   the file's bytes, which the sidecar digests
    * @param [options.feed] {object}   the Resource's Collection, whose next
    *   feed position the sidecar takes; absent for a chunk
    * @param options.feed.spaceId {string}
@@ -5418,6 +5487,7 @@ export class FileSystemBackend implements StorageBackend {
     archived,
     contentType,
     fileName,
+    body,
     feed
   }: {
     collectionDir: string
@@ -5425,8 +5495,12 @@ export class FileSystemBackend implements StorageBackend {
     archived?: MetaSidecar
     contentType: string
     fileName: string
+    body: Buffer
     feed?: { spaceId: string; collectionId: string }
   }): Promise<void> {
+    // The digest of the bytes written, whatever the archive carries
+    // (`restampImportedSidecar` drops an archived one).
+    const digest = await contentDigestOf(body)
     if (!archived) {
       await this.#stampSidecar({
         collectionDir,
@@ -5437,7 +5511,8 @@ export class FileSystemBackend implements StorageBackend {
           ...stamp,
           generation,
           contentType,
-          fileName
+          fileName,
+          digest
         })
       })
       return
@@ -5447,7 +5522,8 @@ export class FileSystemBackend implements StorageBackend {
         sidecar: { ...archived, contentType },
         mint: () => this.#clock.mint()
       })),
-      fileName
+      fileName,
+      digest
     }
     if (feed) {
       await this.#writeFeedSidecar({
@@ -6559,7 +6635,7 @@ export class FileSystemBackend implements StorageBackend {
       // The representation's content-type is carried over to the tombstone:
       // once the content file is gone the tombstone sidecar is the only record
       // of it, and the change feed reports it.
-      const { contentType } = live.sidecar
+      const { contentType, digest } = live.sidecar
       // The tombstone (`.tombstone.<id>.json`) is the delete's commit point:
       // it is written BEFORE the live sidecar and the representation are
       // removed, so a crash between the steps leaves a tombstone beside a
@@ -6595,6 +6671,9 @@ export class FileSystemBackend implements StorageBackend {
           generation,
           deleted: true,
           contentType,
+          // The deleted content's digest, which a write over the tombstone
+          // on a write-once Collection is compared with.
+          ...(digest !== undefined && { digest }),
           // A deletion is a revision like any other: the tombstone carries the
           // writer-attribution label THIS delete declared, not the Resource's
           // prior one (declare-or-clear, same as a content write).
@@ -6894,31 +6973,39 @@ export class FileSystemBackend implements StorageBackend {
     }
 
     // A write-once Collection: a stored chunk takes only a repeat of its
-    // bytes, which writes nothing. A stored chunk whose sidecar carries no
+    // digest, which writes nothing. A stored chunk whose sidecar carries no
     // stamp is damaged, and the repeat repairs it: the bytes stay, and the
-    // sidecar is stamped below.
+    // sidecar is stamped below. A chunk keeps no tombstone, so the rule
+    // binds a live chunk only.
+    const heldChunk = storedChunk.live?.sidecar
     const writeOnce =
-      storedPath !== undefined &&
+      heldChunk !== undefined &&
       (await this.#isWriteOnce({
         spaceId,
         collectionId,
         immutable
       }))
+    let digest: string
     if (writeOnce) {
-      const stored = await this.#answerImmutableRepeat({
+      const repeat = await this.#answerImmutableRepeat({
+        sidecar: heldChunk,
         filePath: storedPath,
-        sidecar: priorChunkSidecar,
         input,
         requestName: 'Write Chunk'
       })
-      if (stored !== undefined) {
-        return stored
+      if (repeat.validator !== undefined) {
+        return repeat.validator
       }
+      digest = repeat.digest
     } else {
       // The chunk directory is created lazily on first write (a binary body is
       // streamed into a temp file in it, so it must exist first).
       await mkdir(chunkDir, { recursive: true })
-      await this.#writeRepresentationBytes({ spaceId, filePath, input })
+      digest = await this.#writeRepresentationBytes({
+        spaceId,
+        filePath,
+        input
+      })
     }
 
     // Mint the chunk's stamp under its `generation` (its ETag validator),
@@ -6937,8 +7024,9 @@ export class FileSystemBackend implements StorageBackend {
         generation,
         // The stored chunk file's name and the type it carries, as on a
         // Resource. A write-once repeat wrote no bytes, so both are read off
-        // the stored file.
-        ...sidecarFileMembers(writeOnce ? storedPath : filePath)
+        // the stored file, and its digest is the stored one.
+        ...sidecarFileMembers(writeOnce ? storedPath! : filePath),
+        digest
       })
     })
 
@@ -9434,6 +9522,9 @@ export class FileSystemBackend implements StorageBackend {
               generation,
               deleted: true,
               contentType: resource.contentType,
+              // The held record's digest, live or tombstone, as a local
+              // delete carries it. A tombstone over nothing has none.
+              ...(prior?.digest !== undefined && { digest: prior.digest }),
               ...(writerId !== undefined && { writerId })
             }
           })
@@ -9466,7 +9557,11 @@ export class FileSystemBackend implements StorageBackend {
           collectionDir,
           fileNameFor({ resourceId, contentType: input.contentType })
         )
-        await this.#writeRepresentationBytes({ spaceId, filePath, input })
+        const digest = await this.#writeRepresentationBytes({
+          spaceId,
+          filePath,
+          input
+        })
         // The sidecar is written before any prior representation is pruned,
         // as on a content write.
         await this.#writeFeedSidecar({
@@ -9483,7 +9578,8 @@ export class FileSystemBackend implements StorageBackend {
             writerId,
             epoch: resource.epoch,
             prior,
-            filePath
+            filePath,
+            digest
           })
         })
         await this.#removeReplacedFile({
@@ -9568,7 +9664,7 @@ export class FileSystemBackend implements StorageBackend {
    */
   async #bufferInput(input: ResourceInput): Promise<Buffer> {
     if (input.kind === 'json') {
-      return Buffer.from(JSON.stringify(input.data))
+      return storedJsonBytes(input.data)
     }
     this.#assertUploadSize({
       maxUploadBytes: this.maxUploadBytes,
@@ -10050,8 +10146,9 @@ export class FileSystemBackend implements StorageBackend {
         ? { outcome: 'retry' }
         : { outcome: 'skipped' }
 
+    let digest: string
     try {
-      await this.#writeRepresentationBytes({
+      digest = await this.#writeRepresentationBytes({
         spaceId,
         filePath,
         input,
@@ -10070,7 +10167,8 @@ export class FileSystemBackend implements StorageBackend {
         const sidecar: StagedChunkSidecar = {
           ...sidecarFileMembers(filePath),
           size,
-          peerEtag
+          peerEtag,
+          digest
         }
         await atomicWriteFile({
           filePath: this.#containedJoin(runDir, metaSidecarFileName(chunkId)),
@@ -10264,7 +10362,7 @@ export class FileSystemBackend implements StorageBackend {
         })
         const parentDir = this.#containedJoin(runDir, STAGING_PARENT_DIR_NAME)
         await mkdir(parentDir, { recursive: true })
-        await this.#writeRepresentationBytes({
+        const parentDigest = await this.#writeRepresentationBytes({
           spaceId,
           filePath: path.join(parentDir, parentFileName),
           input
@@ -10281,7 +10379,8 @@ export class FileSystemBackend implements StorageBackend {
             writerId,
             epoch: resource.epoch,
             prior,
-            filePath: parentFileName
+            filePath: parentFileName,
+            digest: parentDigest
           })
         }
         // `next/` stands from here until the directory swap, which is how a
@@ -10723,7 +10822,9 @@ export class FileSystemBackend implements StorageBackend {
               createdAt: chunkStamp.updatedAt,
               ...chunkStamp,
               generation: newGeneration(),
-              ...sidecarFileMembers(movedPath)
+              ...sidecarFileMembers(movedPath),
+              // The staged bytes' digest, taken when they were staged.
+              digest: staged.digest
             }
           })
         }

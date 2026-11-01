@@ -37,6 +37,7 @@ import {
   JSON_FILE_SUFFIX,
   SPACE_FILE_PREFIX,
   SPACE_POLICY_FILE_NAME,
+  parseChunkDirName,
   parseMetaSidecarFileName,
   parseResourcePolicyFileName,
   spaceMetadataFileName
@@ -153,7 +154,17 @@ export const STORE_MIGRATIONS: StoreMigration[] = [
   // is no conversion step: a store holding one is refused, every boot, until
   // it is wiped or restored from an archive (an import writes the new
   // names). A store with none passes and is stamped at this version.
-  { kind: 'refuse', run: refuseMetadataUnderOldNames }
+  { kind: 'refuse', run: refuseMetadataUnderOldNames },
+  // v10: every live Resource and chunk sidecar carries `digest`, the content
+  // digest of its stored representation, and a Resource tombstone carries the
+  // digest of the content it replaced. A live sidecar written at an earlier
+  // layout carries none, and there is no digesting step: a store holding one
+  // is refused, every boot, until it is wiped or restored from an archive (an
+  // import digests each file it writes). A tombstone with no digest is not
+  // refused: one holds nothing the write-once rule can compare, so a write
+  // over it is an ordinary create. A store with no such sidecar passes and is
+  // stamped at this version.
+  { kind: 'refuse', run: refuseUndigestedSidecars }
 ]
 
 /**
@@ -200,6 +211,78 @@ async function refuseUnstampedSpaces({
         'an empty store.'
     })
   }
+}
+
+/**
+ * The layout step that refuses a store holding a live Resource or chunk
+ * sidecar with no content digest: a `.meta.<id>.json` file in any Collection
+ * dir, or in any chunk dir beneath one, whose body is a JSON object that is
+ * not a tombstone and carries no string `digest`. A sidecar that does not
+ * parse is not a record, and a tombstone is not read.
+ * @param options {object}
+ * @param options.dataDir {string}
+ * @returns {Promise<void>}
+ */
+async function refuseUndigestedSidecars({
+  dataDir
+}: {
+  dataDir: string
+}): Promise<void> {
+  const spacesDir = path.join(dataDir, 'spaces')
+  const sidecarPaths: string[] = []
+  const collectSidecars = (dir: string, entries: Dirent[]): void => {
+    for (const entry of entries) {
+      if (
+        entry.isFile() &&
+        parseMetaSidecarFileName(entry.name) !== undefined
+      ) {
+        sidecarPaths.push(path.join(dir, entry.name))
+      }
+    }
+  }
+  for await (const { collectionDir, children } of collectionDirs(spacesDir)) {
+    collectSidecars(collectionDir, children)
+    for (const child of children) {
+      if (child.isDirectory() && parseChunkDirName(child.name) !== undefined) {
+        const chunkDir = path.join(collectionDir, child.name)
+        collectSidecars(chunkDir, await readDirEntries(chunkDir))
+      }
+    }
+  }
+  const verdicts = await mapInBatches({
+    items: sidecarPaths,
+    map: lacksDigest
+  })
+  const undigested = verdicts.filter(Boolean).length
+  if (undigested > 0) {
+    throw new StoreVersionError({
+      detail:
+        `${spacesDir} holds ${undigested} live Resource or chunk sidecar(s) ` +
+        'written before records carried a content digest, and there is no ' +
+        'digesting migration. Wipe the data directory, or restore each Space ' +
+        'from an export archive into an empty store.'
+    })
+  }
+}
+
+/**
+ * Whether a sidecar file's body is a JSON object that is not a tombstone and
+ * carries no string `digest`. A file gone since the listing, or one that
+ * does not parse, is not one.
+ * @param filePath {string}
+ * @returns {Promise<boolean>}
+ */
+async function lacksDigest(filePath: string): Promise<boolean> {
+  const bytes = await readFileIfPresent(filePath)
+  if (bytes === undefined) {
+    return false
+  }
+  const sidecar = parseSidecarBytes(bytes)
+  return (
+    sidecar !== undefined &&
+    sidecar.deleted !== true &&
+    typeof sidecar.digest !== 'string'
+  )
 }
 
 /**

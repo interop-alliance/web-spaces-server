@@ -9853,7 +9853,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         ).rejects.toBeInstanceOf(PreconditionFailedError)
       })
 
-      it('a write over a tombstone is an ordinary create', async () => {
+      it('a write over a tombstone is held to the deleted content: a repeat is a no-op, a change is refused', async () => {
         const { backend } = harness
         const { validator: created } = await backend.writeResource({
           spaceId,
@@ -9868,21 +9868,39 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           resourceId: 'tombstoned'
         })
         const before = await feedCheckpoint()
-        const { validator: recreated } = await backend.writeResource({
+        // The tombstone keeps the deleted content's digest, so a different
+        // body is refused and the Resource cannot be edited through a delete
+        // and a re-create.
+        await expect(
+          backend.writeResource({
+            spaceId,
+            collectionId,
+            resourceId: 'tombstoned',
+            input: jsonInput({ a: 2 }),
+            immutable: true
+          })
+        ).rejects.toBeInstanceOf(ResourceImmutableError)
+        // A repeat of the deleted content writes nothing: it answers the
+        // tombstone's validator, takes no feed position, and leaves the
+        // Resource deleted.
+        const repeated = await backend.writeResource({
           spaceId,
           collectionId,
           resourceId: 'tombstoned',
-          input: jsonInput({ a: 2 }),
+          input: jsonInput({ a: 1 }),
           immutable: true
         })
-        assertValidatorAdvanced(created, recreated)
-        assert.ok((await feedCheckpoint())! > before!)
-        const read = await backend.getResource({
-          spaceId,
-          collectionId,
-          resourceId: 'tombstoned'
-        })
-        assert.equal(await streamToString(read.resourceStream), '{"a":2}')
+        assert.equal(repeated.created, false)
+        assertValidatorAdvanced(created, repeated.validator)
+        assert.equal(repeated.members.size, 0)
+        assert.equal(await feedCheckpoint(), before)
+        await expect(
+          backend.getResource({
+            spaceId,
+            collectionId,
+            resourceId: 'tombstoned'
+          })
+        ).rejects.toBeInstanceOf(ResourceNotFoundError)
       })
 
       it('chunks follow the same rule', async () => {

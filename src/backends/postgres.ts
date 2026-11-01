@@ -72,6 +72,7 @@ import {
 } from '@interop/space-archive'
 import type { ArchiveEntry, ArchiveFile } from '@interop/space-archive'
 import type { MetaSidecar } from '../lib/metaSidecar.js'
+import { contentDigestOf, storedJsonBytes } from '../lib/contentDigest.js'
 import {
   parseSidecarBytes,
   restampImportedSidecar
@@ -335,6 +336,10 @@ interface ResourceRow extends StampColumns {
   created_by: IDID | null
   epoch: string | null
   writer_id: string | null
+  // The content digest of the stored representation (`lib/contentDigest.ts`);
+  // a tombstone keeps the deleted content's. NULL on a tombstone written with
+  // no bytes to digest (an import's, or a replica apply's over no prior row).
+  digest: string | null
   // Postgres returns a `bigint` as a string.
   feed_position: string | null
 }
@@ -1647,24 +1652,31 @@ export class PostgresBackend implements StorageBackend {
    * size-checked; a binary body pre-flights its declared size, then buffers
    * through the counting guard that hard-caps a body whose size is omitted or
    * understated. Buffering happens BEFORE the write transaction so a slow upload
-   * holds no row lock. Shared by `writeResource` and `writeChunk`.
+   * holds no row lock, and the content digest the row records (over the bytes
+   * as stored, a JSON body re-serialized) is taken here with it, so no write
+   * path stores bytes without their digest. Shared by every Resource and chunk
+   * write and apply.
    * @param input {ResourceInput}
-   * @returns {Promise<Buffer>}
+   * @returns {Promise<{ bytes: Buffer, digest: string }>}
    */
-  async #bufferInputCapped(input: ResourceInput): Promise<Buffer> {
+  async #bufferInputCapped(
+    input: ResourceInput
+  ): Promise<{ bytes: Buffer; digest: string }> {
+    let bytes: Buffer
     if (input.kind === 'json') {
-      const content = Buffer.from(JSON.stringify(input.data))
-      this.#assertUploadSize(content.length)
-      return content
+      bytes = storedJsonBytes(input.data)
+      this.#assertUploadSize(bytes.length)
+    } else {
+      if (input.declaredBytes !== undefined) {
+        this.#assertUploadSize(input.declaredBytes)
+      }
+      bytes = await bufferStreamCapped({
+        stream: input.stream,
+        maxUploadBytes: this.maxUploadBytes,
+        backendId: this.describe().id
+      })
     }
-    if (input.declaredBytes !== undefined) {
-      this.#assertUploadSize(input.declaredBytes)
-    }
-    return bufferStreamCapped({
-      stream: input.stream,
-      maxUploadBytes: this.maxUploadBytes,
-      backendId: this.describe().id
-    })
+    return { bytes, digest: await contentDigestOf(bytes) }
   }
 
   /**
@@ -2922,7 +2934,8 @@ export class PostgresBackend implements StorageBackend {
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceWriteResult> {
-    const content = await this.#bufferInputCapped(input)
+    // Buffered and digested before the transaction opens.
+    const { bytes: content, digest } = await this.#bufferInputCapped(input)
 
     return this.#withTransaction(async client => {
       // First lock of the backend-wide order (`#lockSpaceRow`), before the
@@ -2937,19 +2950,26 @@ export class PostgresBackend implements StorageBackend {
         requestName: 'Write Resource'
       })
 
-      // A write-once Collection: over a live Resource, only a repeat of the
-      // stored media type and bytes passes, and it writes nothing. It is
-      // decided first, before the unique-claim scans and before the feed
-      // position is taken: a write this rule answers stores nothing, so it
-      // claims nothing and takes no position. The Space row lock held above
-      // serializes every write to the Space's rows, so the row read here is
-      // the one the write would replace. A tombstone keeps no bytes, so a
-      // write over one is an ordinary create.
+      // A write-once Collection: over a live Resource or a tombstone, only a
+      // repeat of the stored media type and content digest passes, and it
+      // writes nothing. It is decided first, before the unique-claim scans
+      // and before the feed position is taken: a write this rule answers
+      // stores nothing, so it claims nothing and takes no position. The Space
+      // row lock held above serializes every write to the Space's rows, so
+      // the row read here is the one the write would replace. A tombstone
+      // keeps the deleted content's digest, so a write over it is held to
+      // the same rule and a repeat leaves the Resource deleted; a tombstone
+      // with no digest (written with no bytes to digest) holds nothing to
+      // compare, so a write over it is an ordinary create.
       if (immutable !== undefined) {
         const { rows: storedRows } = await client.query<
-          WrittenMemberRow & { generation: string; deleted: boolean }
+          WrittenMemberRow & {
+            generation: string
+            deleted: boolean
+            digest: string | null
+          }
         >(
-          `SELECT generation, deleted, ${WRITTEN_MEMBER_COLUMNS}
+          `SELECT generation, deleted, digest, ${WRITTEN_MEMBER_COLUMNS}
              FROM resources
             WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3`,
           [spaceId, collectionId, resourceId]
@@ -2957,7 +2977,7 @@ export class PostgresBackend implements StorageBackend {
         const stored = storedRows[0]
         if (
           stored !== undefined &&
-          !stored.deleted &&
+          stored.digest !== null &&
           (await this.#isWriteOnce({
             client,
             spaceId,
@@ -2967,20 +2987,14 @@ export class PostgresBackend implements StorageBackend {
         ) {
           assertWritePrecondition({
             resourceId,
-            exists: true,
+            exists: !stored.deleted,
             currentEtag: etagOfRow(stored),
             ifMatch,
             ifNoneMatch
           })
-          const { rows: byteRows } = await client.query<{ same: boolean }>(
-            `SELECT (content = $4) AS same
-               FROM resources
-              WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3`,
-            [spaceId, collectionId, resourceId, content]
-          )
           if (
             !sameMediaType(stored.content_type, input.contentType) ||
-            byteRows[0]?.same !== true
+            stored.digest !== digest
           ) {
             throw new ResourceImmutableError({ requestName: 'Write Resource' })
           }
@@ -3143,15 +3157,16 @@ export class PostgresBackend implements StorageBackend {
         // attribution"): a content write stores it and CLEARS it when absent,
         // the same declare-or-clear terms as `epoch`.
         writerId ?? null,
-        feedPosition
+        feedPosition,
+        digest
       ]
       const insertSql = `
         INSERT INTO resources (
           space_id, collection_id, resource_id, content_type, content,
           is_json, size_bytes, generation, custom, deleted, created_at,
           updated_at, updated_at_counter, origin_id, created_by, epoch,
-          writer_id, feed_position
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, false, $9, $10, $11, $12, $13, $14, $15, $16)`
+          writer_id, feed_position, digest
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, false, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
       /**
        * The four `meta_*` columns and `custom` are deliberately NOT in the
        * conflict update: an overwrite keeps the `/meta` record as it stands
@@ -3193,7 +3208,8 @@ export class PostgresBackend implements StorageBackend {
                                ELSE resources.created_by END,
              epoch = EXCLUDED.epoch,
              writer_id = EXCLUDED.writer_id,
-             feed_position = EXCLUDED.feed_position`,
+             feed_position = EXCLUDED.feed_position,
+             digest = EXCLUDED.digest`,
         values,
         createOnly: ifNoneMatch === '*' && prior === undefined,
         generation,
@@ -3474,7 +3490,9 @@ export class PostgresBackend implements StorageBackend {
       // `writer_id` is set from THIS delete's own declaration, not preserved
       // from the row -- a deletion is a revision like any other, and the
       // tombstone carries the label the deleting write declared, if any
-      // (spec "Writer attribution").
+      // (spec "Writer attribution"). `digest` is left as it stands: the
+      // tombstone keeps the deleted content's digest, which the write-once
+      // rule compares a write over it with.
       const stamp = await this.#clock.mint({ held: stampOfRow(prior) })
       await client.query(
         `UPDATE resources SET
@@ -3821,7 +3839,7 @@ export class PostgresBackend implements StorageBackend {
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<EtagValidator> {
-    const bytes = await this.#bufferInputCapped(input)
+    const { bytes, digest } = await this.#bufferInputCapped(input)
 
     return this.#withTransaction(async client => {
       // First lock of the backend-wide order (`#lockSpaceRow`), refusing a
@@ -3875,7 +3893,7 @@ export class PostgresBackend implements StorageBackend {
       })
 
       // A write-once Collection: a stored chunk takes only a repeat of its
-      // media type and bytes, which writes nothing.
+      // media type and content digest, which writes nothing.
       if (
         prior !== undefined &&
         (await this.#isWriteOnce({
@@ -3887,19 +3905,19 @@ export class PostgresBackend implements StorageBackend {
       ) {
         const { rows: storedRows } = await client.query<{
           content_type: string
-          same: boolean
+          digest: string
         }>(
-          `SELECT content_type, (bytes = $5) AS same
+          `SELECT content_type, digest
              FROM chunks
             WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3
               AND chunk_index = $4`,
-          [spaceId, collectionId, resourceId, chunkIndex, bytes]
+          [spaceId, collectionId, resourceId, chunkIndex]
         )
         const stored = storedRows[0]
         if (
           stored === undefined ||
           !sameMediaType(stored.content_type, input.contentType) ||
-          !stored.same
+          stored.digest !== digest
         ) {
           throw new ResourceImmutableError({ requestName: 'Write Chunk' })
         }
@@ -3926,14 +3944,15 @@ export class PostgresBackend implements StorageBackend {
         bytes,
         bytes.length,
         generation,
-        ...stampValues(stamp)
+        ...stampValues(stamp),
+        digest
       ]
       const insertSql = `
         INSERT INTO chunks (
           space_id, collection_id, resource_id, chunk_index,
           content_type, bytes, size, generation, updated_at,
-          updated_at_counter, origin_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+          updated_at_counter, origin_id, digest
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
       // Create-if-absent atomicity mirrors `writeResource`: concurrent
       // creators through this method are serialized by `#lockSameKeyCreate`
       // above; the race against a writer that does not take that lock is
@@ -3956,7 +3975,8 @@ export class PostgresBackend implements StorageBackend {
            generation = chunks.generation,
            updated_at = EXCLUDED.updated_at,
            updated_at_counter = EXCLUDED.updated_at_counter,
-           origin_id = EXCLUDED.origin_id`,
+           origin_id = EXCLUDED.origin_id,
+           digest = EXCLUDED.digest`,
         values,
         createOnly: ifNoneMatch === '*' && prior === undefined,
         generation,
@@ -5762,9 +5782,11 @@ export class PostgresBackend implements StorageBackend {
       })
     }
     // Buffered before the transaction, so a slow body holds no row lock.
-    const content = resource.deleted
+    const buffered = resource.deleted
       ? null
       : await this.#bufferInputCapped(resource.input)
+    const content = buffered === null ? null : buffered.bytes
+    const digest = buffered === null ? null : buffered.digest
     const contentType = resource.deleted
       ? resource.contentType
       : resource.input.contentType
@@ -5833,6 +5855,7 @@ export class PostgresBackend implements StorageBackend {
         writerId,
         contentType,
         content,
+        digest,
         epoch: resource.deleted ? undefined : resource.epoch,
         prior
       })
@@ -5951,6 +5974,7 @@ export class PostgresBackend implements StorageBackend {
     writerId,
     contentType,
     content,
+    digest,
     epoch,
     prior
   }: {
@@ -5965,6 +5989,7 @@ export class PostgresBackend implements StorageBackend {
     writerId?: string
     contentType: string
     content: Buffer | null
+    digest: string | null
     epoch?: string
     prior?: AppliedResourcePrior
   }): Promise<number> {
@@ -5983,7 +6008,9 @@ export class PostgresBackend implements StorageBackend {
     const storedCreatedBy =
       createdBy ?? (content === null ? (prior?.created_by ?? null) : null)
     // The `/meta` record and `custom` stay as they stand on a live row a
-    // live Resource replaces. A tombstone on either side has none.
+    // live Resource replaces. A tombstone on either side has none. A
+    // tombstone keeps the row's digest, as a local delete does; a live
+    // Resource records the digest of the bytes applied.
     const written = await this.#insertOrUpsertVersioned({
       client,
       insertSql: `
@@ -5991,9 +6018,9 @@ export class PostgresBackend implements StorageBackend {
           space_id, collection_id, resource_id, content_type, content,
           is_json, size_bytes, generation, custom, deleted, created_at,
           updated_at, updated_at_counter, origin_id, created_by, epoch,
-          writer_id, feed_position
+          writer_id, feed_position, digest
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12,
-                  $13, $14, $15, $16, $17)`,
+                  $13, $14, $15, $16, $17, $18)`,
       priorSizeSql: `SELECT size_bytes AS prior_size, deleted AS prior_deleted
            FROM resources
           WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3`,
@@ -6027,7 +6054,10 @@ export class PostgresBackend implements StorageBackend {
            created_by = EXCLUDED.created_by,
            epoch = EXCLUDED.epoch,
            writer_id = EXCLUDED.writer_id,
-           feed_position = EXCLUDED.feed_position`,
+           feed_position = EXCLUDED.feed_position,
+           digest = CASE WHEN EXCLUDED.deleted
+                         THEN resources.digest
+                         ELSE EXCLUDED.digest END`,
       values: [
         spaceId,
         collectionId,
@@ -6043,7 +6073,8 @@ export class PostgresBackend implements StorageBackend {
         storedCreatedBy,
         content === null ? null : (epoch ?? null),
         writerId ?? null,
-        feedPosition
+        feedPosition,
+        digest
       ],
       createOnly: false,
       generation,
@@ -6197,7 +6228,8 @@ export class PostgresBackend implements StorageBackend {
     peerEtag: string
   }): Promise<ApplyResult> {
     // Buffered before the transaction, so a slow body holds no row lock.
-    const bytes = await this.#bufferInputCapped(input)
+    // The staged bytes' digest is what the swap records on the chunk row.
+    const { bytes, digest } = await this.#bufferInputCapped(input)
 
     return this.#withTransaction(async client => {
       const ended = await this.#beginApply({
@@ -6225,15 +6257,16 @@ export class PostgresBackend implements StorageBackend {
          )
          INSERT INTO chunk_staging (
            space_id, collection_id, resource_id, replica_id, parent_etag,
-           chunk_index, content_type, bytes, size, peer_etag
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           chunk_index, content_type, bytes, size, peer_etag, digest
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (space_id, collection_id, resource_id, replica_id,
                       parent_etag, chunk_index)
          DO UPDATE SET
            content_type = EXCLUDED.content_type,
            bytes = EXCLUDED.bytes,
            size = EXCLUDED.size,
-           peer_etag = EXCLUDED.peer_etag
+           peer_etag = EXCLUDED.peer_etag,
+           digest = EXCLUDED.digest
          RETURNING COALESCE((SELECT size FROM prior), 0) AS prior_size`,
         [
           ...runKey,
@@ -6241,7 +6274,8 @@ export class PostgresBackend implements StorageBackend {
           input.contentType,
           bytes,
           bytes.length,
-          peerEtag
+          peerEtag,
+          digest
         ]
       )
       const { rows: creditRows } = await client.query<{ credit: string }>(
@@ -6398,7 +6432,9 @@ export class PostgresBackend implements StorageBackend {
     chunks: { run: ChunkStagingRun; staged: number[] }
   }): Promise<ApplyResult> {
     // Buffered before the transaction, so a slow body holds no row lock.
-    const content = await this.#bufferInputCapped(resource.input)
+    const { bytes: content, digest } = await this.#bufferInputCapped(
+      resource.input
+    )
 
     return this.#withTransaction(async client => {
       const ended = await this.#beginApply({
@@ -6502,6 +6538,7 @@ export class PostgresBackend implements StorageBackend {
         writerId,
         contentType: resource.input.contentType,
         content,
+        digest,
         epoch: resource.epoch,
         prior
       })
@@ -6520,11 +6557,11 @@ export class PostgresBackend implements StorageBackend {
           `INSERT INTO chunks (
              space_id, collection_id, resource_id, chunk_index, content_type,
              bytes, size, generation, updated_at, updated_at_counter,
-             origin_id
+             origin_id, digest
            )
            SELECT s.space_id, s.collection_id, s.resource_id, s.chunk_index,
                   s.content_type, s.bytes, s.size, v.generation,
-                  v.updated_at, v.updated_at_counter, v.origin_id
+                  v.updated_at, v.updated_at_counter, v.origin_id, s.digest
              FROM chunk_staging s
              JOIN unnest($6::int[], $7::text[], $8::text[], $9::int[],
                          $10::text[])
@@ -6542,7 +6579,8 @@ export class PostgresBackend implements StorageBackend {
              generation = EXCLUDED.generation,
              updated_at = EXCLUDED.updated_at,
              updated_at_counter = EXCLUDED.updated_at_counter,
-             origin_id = EXCLUDED.origin_id
+             origin_id = EXCLUDED.origin_id,
+             digest = EXCLUDED.digest
            RETURNING size`,
           [
             ...resourceKey,
@@ -8126,8 +8164,8 @@ export class PostgresBackend implements StorageBackend {
           `INSERT INTO chunks (
              space_id, collection_id, resource_id, chunk_index,
              content_type, bytes, size, generation, updated_at,
-             updated_at_counter, origin_id
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             updated_at_counter, origin_id, digest
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT DO NOTHING
            RETURNING size`,
           [
@@ -8139,7 +8177,9 @@ export class PostgresBackend implements StorageBackend {
             chunk.body,
             chunk.body.length,
             resolveGeneration(chunk.generation),
-            ...stampValues(stamp)
+            ...stampValues(stamp),
+            // The digest of the bytes written, whatever the archive carries.
+            await contentDigestOf(chunk.body)
           ]
         )
         if (insertedRows.length > 0) {
@@ -8288,15 +8328,19 @@ export class PostgresBackend implements StorageBackend {
     // A tombstone carries no `/meta` record, even if its archived sidecar
     // claims one.
     const meta = deleted ? undefined : restamped.meta
+    // The digest of the bytes written, whatever the archive carries
+    // (`restampImportedSidecar` dropped an archived one). An imported
+    // tombstone has no bytes, so it records none.
+    const digest = body === null ? null : await contentDigestOf(body)
     await client.query(
       `INSERT INTO resources (
          space_id, collection_id, resource_id, content_type, content,
          is_json, size_bytes, generation, updated_at, updated_at_counter,
          origin_id, meta_generation, meta_updated_at,
          meta_updated_at_counter, meta_origin_id, custom, deleted,
-         created_at, created_by, epoch, writer_id, feed_position
+         created_at, created_by, epoch, writer_id, feed_position, digest
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                 $15, $16::jsonb, $17, $18, $19, $20, $21, $22)`,
+                 $15, $16::jsonb, $17, $18, $19, $20, $21, $22, $23)`,
       [
         spaceId,
         collectionId,
@@ -8323,7 +8367,8 @@ export class PostgresBackend implements StorageBackend {
         // Restore the client-declared writer-attribution label (spec "Writer
         // attribution") the same way.
         restamped.writerId ?? null,
-        feedPosition ?? null
+        feedPosition ?? null,
+        digest
       ]
     )
   }
