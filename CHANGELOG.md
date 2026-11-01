@@ -94,8 +94,9 @@
   schema of the staging Postgres database and creates it empty, so a manual
   deploy over a schema migration that refuses the stored rows starts over an
   empty store. It connects from the runner with the `staging` environment's new
-  `DATABASE_URL` secret, and leaves the database as it is, with a warning, when
-  that secret is unset.
+  `DATABASE_URL` secret, before either wipe, so a database the runner cannot
+  reach stops the job with nothing wiped. It leaves the database as it is, with
+  a warning, when that secret is unset.
 
 ### Fixed
 
