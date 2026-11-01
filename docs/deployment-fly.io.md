@@ -399,7 +399,10 @@ wallet app proxies to the staging server's Flycast name. Then:
 3. Limit the environment's deployment branches to `main`.
 4. If the staging app uses Postgres, add its connection string as the
    environment's `DATABASE_URL` secret too, the same value as the app's Fly
-   secret.
+   secret. The workflow connects from a GitHub runner, outside Fly, so the
+   database needs an endpoint the internet reaches, as a Neon database has. A
+   cluster reachable only on Fly's private network, such as Fly Managed
+   Postgres, cannot be wiped this way.
 
 Running the staging workflow by hand offers a `wipe_data` option, on by default.
 It clears the staging volume before deploying, through `fly machine exec` on the
@@ -408,7 +411,9 @@ and creates it empty, so the server starts over an empty data directory and an
 empty schema. The volume wipe goes through the same Machines API the deploy
 uses, so the deploy token covers it. The Postgres wipe connects from the runner
 with the environment's `DATABASE_URL` secret, and is skipped with a warning when
-the environment has none. The server keeps every table in `public`, so give it a
+the environment has none. The workflow connects to the database before either
+wipe, so a database it cannot reach, or a machine it cannot reach, stops the job
+with nothing wiped. The server keeps every table in `public`, so give it a
 database of its own. A wipe also removes the `server` Space's `did:webvh` log,
 which the admin puts back as under "Server identity" in the admin guide. A
 deploy after CI never wipes.
@@ -445,9 +450,13 @@ nothing.
   machine in place of the current one, and dispatch the workflow on the previous
   tag. If the data is disposable, create an empty volume instead
   (`fly volumes create <name> --region <region> --size <gb>`), attach it in
-  place of the current one, and re-run the failed deploy. The staging workflow's
-  `wipe_data` option is no help here: its volume wipe runs `fly machine exec`,
-  which needs a running machine.
+  place of the current one, and re-run the failed deploy. With a Postgres
+  backend, an empty volume leaves the database's rows in place, so drop its
+  `public` schema too before the re-run
+  (`psql "$DATABASE_URL" --command 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`).
+  The staging workflow's `wipe_data` option is no help here: its volume wipe
+  runs `fly machine exec`, which needs a running machine, and the job stops
+  there before it reaches the database.
 
 Read the machine's log first (`fly logs --app <app> --no-tail`): a
 `StoreVersionError` names the layout version `store.json` carries and the one

@@ -58,6 +58,19 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      # Connects to the staging database before either wipe, so a database the
+      # runner cannot reach (a wrong secret, or one only on Fly's private
+      # network) stops the job before anything is wiped.
+      - name: Check Postgres database
+        if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            exit 0
+          fi
+          psql "$DATABASE_URL" --set ON_ERROR_STOP=1 --command 'SELECT 1' > /dev/null
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
       # Clears the volume on the running machine, keeping the ext4 lost+found
       # directory. The command runs through the Machines API exec call, the
       # same API the deploy below updates the machine through, so the deploy
@@ -82,9 +95,9 @@ jobs:
       # schema. The runner connects to the database itself, with the
       # environment's DATABASE_URL secret (the same value as the app's Fly
       # secret), so this step does not need the machine. It runs after the
-      # volume wipe, which does: a machine that cannot be reached stops the
-      # job before either store is wiped. With no such secret there is no
-      # Postgres backend to wipe.
+      # volume wipe, which does, and after the check above reached the
+      # database: a store that cannot be reached stops the job before either
+      # is wiped. With no such secret there is no Postgres backend to wipe.
       - name: Wipe Postgres database
         if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
         run: |
