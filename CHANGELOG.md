@@ -90,6 +90,12 @@
   it took `{ did, was }`.
 - Internal: `spacePath` and `collectionPath` return the canonical trailing-slash
   container URL with no option. No wire change.
+- The staging Deploy workflow's `wipe_data` option also drops the `public`
+  schema of the staging Postgres database and creates it empty, so a manual
+  deploy over a schema migration that refuses the stored rows starts over an
+  empty store. It connects from the runner with the `staging` environment's new
+  `DATABASE_URL` secret, and leaves the database as it is, with a warning, when
+  that secret is unset.
 
 ### Fixed
 
