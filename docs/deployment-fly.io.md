@@ -397,11 +397,21 @@ wallet app proxies to the staging server's Flycast name. Then:
 2. Create an environment named `staging`, with the token as its `FLY_API_TOKEN`
    secret and the staging app's `FLY_APP` and `SERVER_URL` as its variables.
 3. Limit the environment's deployment branches to `main`.
+4. If the staging app uses Postgres, add its connection string as the
+   environment's `DATABASE_URL` secret too, the same value as the app's Fly
+   secret.
 
-Running the staging workflow by hand offers a `wipe_data` option. It clears the
-staging volume before deploying, through `fly machine exec` on the running
-machine, so the server starts over an empty data directory. That goes through
-the same Machines API the deploy uses, so the deploy token covers it.
+Running the staging workflow by hand offers a `wipe_data` option, on by default.
+It clears the staging volume before deploying, through `fly machine exec` on the
+running machine, then drops the `public` schema of the staging Postgres database
+and creates it empty, so the server starts over an empty data directory and an
+empty schema. The volume wipe goes through the same Machines API the deploy
+uses, so the deploy token covers it. The Postgres wipe connects from the runner
+with the environment's `DATABASE_URL` secret, and is skipped with a warning when
+the environment has none. The server keeps every table in `public`, so give it a
+database of its own. A wipe also removes the `server` Space's `did:webvh` log,
+which the admin puts back as under "Server identity" in the admin guide. A
+deploy after CI never wipes.
 
 Neither workflow runs on pull requests, so a pull request from a fork cannot
 read the tokens or the variables. The staging workflow runs after every CI run,
@@ -436,8 +446,8 @@ nothing.
   tag. If the data is disposable, create an empty volume instead
   (`fly volumes create <name> --region <region> --size <gb>`), attach it in
   place of the current one, and re-run the failed deploy. The staging workflow's
-  `wipe_data` option is no help here: it runs `fly machine exec`, which needs a
-  running machine.
+  `wipe_data` option is no help here: its volume wipe runs `fly machine exec`,
+  which needs a running machine.
 
 Read the machine's log first (`fly logs --app <app> --no-tail`): a
 `StoreVersionError` names the layout version `store.json` carries and the one

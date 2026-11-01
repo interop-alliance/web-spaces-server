@@ -4,7 +4,9 @@ name: Deploy (staging)
 # CI workflow passes on a push to main, or by hand from the Actions tab. The
 # `staging` environment holds the deploy token (secret FLY_API_TOKEN) and the
 # deployment's own values (variables FLY_APP and SERVER_URL), which replace
-# the placeholders in fly.toml. Production deploys from deploy.yml, when a
+# the placeholders in fly.toml. When the app uses Postgres, the environment
+# also holds its connection string (secret DATABASE_URL), which the wipe
+# below reaches the database with. Production deploys from deploy.yml, when a
 # release is published. See docs/deployment-fly.io.md.
 
 on:
@@ -16,8 +18,9 @@ on:
     inputs:
       wipe_data:
         description: >-
-          Wipe the staging data volume before deploying. The server then starts
-          over an empty data directory.
+          Wipe the staging data volume and the staging Postgres database before
+          deploying. The server then starts over an empty data directory and an
+          empty schema.
         type: boolean
         default: true
 
@@ -73,6 +76,26 @@ jobs:
             "find /data -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Drops the `public` schema the server keeps its tables in and creates it
+      # again empty, so the deploy below applies every migration over an empty
+      # schema. The runner connects to the database itself, with the
+      # environment's DATABASE_URL secret (the same value as the app's Fly
+      # secret), so this step does not need the machine. It runs after the
+      # volume wipe, which does: a machine that cannot be reached stops the
+      # job before either store is wiped. With no such secret there is no
+      # Postgres backend to wipe.
+      - name: Wipe Postgres database
+        if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::warning::No DATABASE_URL secret on the staging environment, so the Postgres database is left as it is."
+            exit 0
+          fi
+          psql "$DATABASE_URL" --set ON_ERROR_STOP=1 \
+            --command 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
       # Builds the Dockerfile on Fly's remote builder and rolls the machine.
       - name: Deploy
