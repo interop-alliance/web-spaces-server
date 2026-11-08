@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 245
+nextAvailableId: 246
 
 <!-- roadmap-order:index:start -->
 
@@ -56,6 +56,8 @@ Ready:
 - WSS-70 [M] (*) Keystore deletion (route, backend method, orphan GC)
 - WSS-73 [M] (*) Periodic sweep of Spaces and keystores whose did:webvh
   controller no longer resolves
+- WSS-245 [M] (*) DID-relative invocation targets dereferenced through
+  `PathHandler` services
 
 Chains:
 
@@ -990,6 +992,88 @@ the sweep reaps is what a torn run leaves. An account Space whose unlock Spaces
 are all deleted is unreachable to every client, since nothing can locate it and
 nothing can authorize against it, so the server is the only party that can
 remove it.
+
+### WSS-245: [M] (*) DID-relative invocation targets dereferenced through `PathHandler` services
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: zcap, webvh, portability, spec
+- discovered-from: DID-relative URL verification question (2026-11-07)
+- touches:
+  - web-spaces-server (this repo): `src/zcap.ts` (`rootCapabilityLoader`,
+    `expectedRoots`, `verifyZcap`, the peer pre-pass),
+    `src/lib/webvhController.ts` and `src/lib/peerWebvh.ts` (resolving a
+    `did:webvh` this server does not host), `src/lib/containerRule.ts` and
+    `src/lib/clientAnnexClause.ts` (they read chain-link targets),
+    docs/webvh-controllers.md, ARCHITECTURE.md's ZCap Structure
+  - `@interop/zcap`: an async target-dereference hook consulted where the
+    proof's `invocationTarget` is compared with the invoked capability's
+  - `@interop/http-signature-zcap-verify`: pass the hook through
+  - `@interop/did-method-webvh`: PR 20 (`dereference`, `parseDidUrl`,
+    `selectPathHandler`, `pathHandlerUrl`), merged and published
+  - pws-client: dereference a DID URL target to find where to send, accept a DID
+    URL as a grant `target`, derive handles from it
+  - portable-web-spaces-spec: the zCap authorization profile, a DID URL as an
+    `invocationTarget` and as the root capability's target
+  - pws-conformance-suite: cases for the DID-relative chain
+- acceptance:
+  - [ ] Wire decisions recorded in `decisions/` and approved: the root
+        capability form `urn:zcap:root:<DID URL>`, whose target dereferences to
+        a Space URL on this server; a DID URL admitted as the `invocationTarget`
+        of every link beneath it; which `did:webvh` shapes a target may name
+        (self-hosted, replicated, not hosted here)
+  - [ ] A chain whose root and links are DID URLs verifies against an https
+        request when the root dereferences to the Space the request addresses,
+        and the root's controller is that Space's controller
+  - [ ] A DID whose `PathHandler` lands in another Space, on another host, or
+        under a path above the Space URL is refused as the masked `not-found`
+  - [ ] The `PathHandler` entry is read from the current document on every
+        verification; no `versionId` pin is required, and a change of
+        `serviceEndpoint` moves what every grant under the DID addresses
+  - [ ] A `did:webvh` this server does not host resolves under the
+        `PEER_WEBVH_*` bounds and `WAS_WEBVH_BLOCKLIST`, with a cache, and the
+        request signature is checked before any fetch
+  - [ ] The container rule and the client-annex clause decide on dereferenced
+        targets
+  - [ ] Tests: a promoted Space whose document carries a `PathHandler`; a Space
+        exported from one test server and imported on another, with a grant
+        issued before the move invoked after the `serviceEndpoint` is repointed
+  - [ ] docs/webvh-controllers.md and ARCHITECTURE.md describe the mapping and
+        the authority rule
+
+Context: a Space should move to another provider and domain with its zcaps still
+working. Today every `invocationTarget` and every root capability names the
+https URL of the provider, so a move invalidates them all. With the DID URL path
+handling of `did:webvh`, a grant names
+`did:webvh:<scid>:<host>/images/image.jpg`, and the document's `PathHandler`
+service maps the path to the current https URL. The document is the user's, so
+repointing the service is the move, and a version pin would defeat it.
+
+The whole chain lives in DID space. The root capability's target is the DID URL
+the Space is addressed under, and each delegated link attenuates it by the
+library's existing prefix rule, so the link-by-link check needs no change. The
+server synthesizes the root by dereferencing its target to an https URL,
+checking it is this server's and is the Space the request addresses, and giving
+the root that Space's controller. Authority stays with the Space controller; the
+DID's controller can only repoint the mapping. The one comparison that crosses
+schemes is the invocation point, where the https proof target meets the DID
+capability target; that needs an async hook in `@interop/zcap`, since the
+verifier's `url` also feeds the Cavage `(request-target)` and cannot be swapped
+for the DID URL. For `expectedTarget` the server maps the request URL back into
+DID form from the root's remainder.
+
+For portability the DID must be one the user keeps across providers, such as
+`did:webvh:<scid>:alice.example`, since the provider-hosted
+`did:webvh:<scid>:<host>:space:<S>:<C>` changes with the host and its old log
+stops being served. That DID is not hosted here, so the server resolves it over
+the network with the bounds the replication path already has; the local-only
+pre-pass cannot run first, since the root cannot be synthesized before the
+fetch. Whether such a DID may also be the Space controller is a separate
+decision. Related: the foreign `did:webvh` fetch bound (WSS-240) and the
+cross-host invoker research (WSS-162).
+
+---
 
 ### WSS-5: [L] (*) [after WSS-1] Drive API ToS use-case clearance
 
