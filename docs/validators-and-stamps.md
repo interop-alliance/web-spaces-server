@@ -214,11 +214,14 @@ and so its `/meta` object) is matched only by `*`, which RFC 9110 makes true for
 any current representation. Its 304 then carries no `ETag`, as its 200 would
 not.
 
-A Collection Metadata read takes the object before the governing log, not beside
-it. A log append advances the object's local segment, so a read in the other
-order could serve the new `ETag` over the old descriptors, and a 304 would then
-keep them. In this order the worst case is the old `ETag` over the new
-descriptors, which the next revalidation replaces.
+A Collection Metadata read takes the object and the governing log together, or
+else the object before the log, never the log first. A log append advances the
+object's local segment, so a read in the other order could serve the new `ETag`
+over the old descriptors, and a 304 would then keep them. The Postgres backend
+reads both in one statement (`getCollectionMetadataAndLog`), so an append is in
+both or in neither. A backend without that method is read in two steps, the
+object first, where the worst case is the old `ETag` over the new descriptors,
+which the next revalidation replaces.
 
 ### Caching headers
 

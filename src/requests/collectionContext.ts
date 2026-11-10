@@ -15,7 +15,6 @@ import { parseKeyEpochHeader } from '../lib/keyEpoch.js'
 import { stripMetadataValidator } from '../lib/metadataValidator.js'
 import { parseWriterIdHeader } from '../lib/writerAttribution.js'
 import { getCachedGovernedDescriptors } from '../lib/governedDescriptorsCache.js'
-import type { GovernedDescriptors } from '../lib/governedLog.js'
 import { collectionPath, linksetPath } from '../lib/paths.js'
 import { isImmutableCollection } from '../lib/revisions.js'
 import { CollectionNotFoundError, ResourceNotFoundError } from '../errors.js'
@@ -23,6 +22,7 @@ import { withStorageErrors } from '../lib/storageErrors.js'
 import type {
   ChunkMetadata,
   CollectionMetadata,
+  CollectionMetadataAndLog,
   ImmutableUnder,
   ResourceMetadata,
   StorageBackend,
@@ -73,10 +73,14 @@ export function projectCollectionMetadata({
  * `revisions` members are derived here from the log head, so every handler
  * that reads the object through this prelude -- Read Collection Metadata, the
  * envelope enforcement and the write-once rule on writes, the listing's name
- * suppression -- sees the governed descriptors. A stored `revisions` member
- * is replaced by the derived one, and dropped when the head carries none.
- * Update Collection reads the stored object directly instead, since it must
- * not persist the derived members.
+ * suppression -- sees the governed descriptors. The stored object carries no
+ * `encryption` for such a Collection; a direct write of the member is
+ * refused. A stored `revisions` member is replaced by the derived one, and
+ * dropped when the head carries none. The derivation is memoized per backend
+ * by the log's validator (`lib/governedDescriptorsCache.ts`). Update
+ * Collection reads the stored object directly instead, since it must not
+ * persist the derived members, and its recheck under the backend's lock calls
+ * `getCachedGovernedDescriptors` with the lock-consistent log.
  * @param options {object}
  * @param options.request {FastifyRequest}   supplies `request.server.storage`
  *   and `serverUrl`
@@ -98,24 +102,21 @@ export async function getCollectionOrThrow({
   requestName: string
 }): Promise<StoredCollectionMetadata> {
   const { storage, serverUrl } = request.server
-  // The Metadata object is read before the log, not beside it. A log append
-  // advances the object's local segment, so its `ETag`. Read in the other
-  // order, a read racing an append could pair the new `ETag` with the old
-  // log head, and every later conditional read would answer 304 over the
-  // stale descriptors. In this order the worst case is the old `ETag` over
-  // the new descriptors, which the next revalidation replaces.
-  const collectionMetadata = await storage.getCollectionMetadata({
+  const metadataAndLog = await readCollectionMetadataAndLog({
+    storage,
     spaceId,
     collectionId
   })
-  if (!collectionMetadata) {
+  if (!metadataAndLog) {
     throw new CollectionNotFoundError({ requestName })
   }
-  const governed = await governedDescriptorsOf({
+  const { collectionMetadata, log } = metadataAndLog
+  const governed = await getCachedGovernedDescriptors({
     storage,
     serverUrl,
     spaceId,
-    collectionId
+    collectionId,
+    log
   })
   if (governed === undefined) {
     return collectionMetadata
@@ -129,40 +130,48 @@ export async function getCollectionOrThrow({
 }
 
 /**
- * The `encryption` and `revisions` descriptors a log-governed Collection
- * serves, derived from its history log's head (the `governed-history-logs`
- * feature), or `undefined` when the Collection has no log. The stored object
- * carries no `encryption` for such a Collection; a direct write of the member
- * is refused. The derivation is memoized per backend by the log's validator
- * (`lib/governedDescriptorsCache.ts`); a caller that already holds a
- * lock-consistent log (Update Collection's recheck under the backend's lock)
- * calls `getCachedGovernedDescriptors` with it directly instead.
+ * Reads a Collection Metadata object and its governing history log, in one
+ * read when the backend offers `getCollectionMetadataAndLog`, else the
+ * Metadata object first and then the log. Either way the answer has the
+ * method's shape: falsy when the Collection does not exist (the two-read form
+ * then skips the log), and no `log` member when it is not governed.
+ *
+ * The two-read form keeps that order. The Metadata object is read before the
+ * log, not beside it. A log append advances the object's local segment, so
+ * its `ETag`. Read in the other order, a read racing an append could pair the
+ * new `ETag` with the old log head, and every later conditional read would
+ * answer 304 over the stale descriptors. In this order the worst case is the
+ * old `ETag` over the new descriptors, which the next revalidation replaces.
+ * The one-read form takes both in a single statement, so a log append is in
+ * both or in neither.
  * @param options {object}
  * @param options.storage {StorageBackend}
- * @param options.serverUrl {string}
  * @param options.spaceId {string}
  * @param options.collectionId {string}
- * @returns {Promise<GovernedDescriptors | undefined>}
+ * @returns {Promise<CollectionMetadataAndLog | undefined>}
  */
-export async function governedDescriptorsOf({
+async function readCollectionMetadataAndLog({
   storage,
-  serverUrl,
   spaceId,
   collectionId
 }: {
   storage: StorageBackend
-  serverUrl: string
   spaceId: string
   collectionId: string
-}): Promise<GovernedDescriptors | undefined> {
-  const log = await storage.getCollectionLog({ spaceId, collectionId })
-  return await getCachedGovernedDescriptors({
-    storage,
-    serverUrl,
+}): Promise<CollectionMetadataAndLog | undefined> {
+  if (storage.getCollectionMetadataAndLog) {
+    return await storage.getCollectionMetadataAndLog({ spaceId, collectionId })
+  }
+  const collectionMetadata = await storage.getCollectionMetadata({
     spaceId,
-    collectionId,
-    log
+    collectionId
   })
+  // A getter resolves falsy for not-found, not only `undefined`.
+  if (!collectionMetadata) {
+    return undefined
+  }
+  const log = await storage.getCollectionLog({ spaceId, collectionId })
+  return { collectionMetadata, ...(log && { log }) }
 }
 
 /**

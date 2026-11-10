@@ -228,6 +228,7 @@ import type {
   ResourceWriteResult,
   StoredCollectionMetadata,
   CollectionLogResult,
+  CollectionMetadataAndLog,
   ImmutableUnder,
   StoredCollectionLog,
   CollectionMetadataInput,
@@ -2294,6 +2295,39 @@ export class PostgresBackend implements StorageBackend {
       [spaceId, collectionId]
     )
     return logResultFromRow(rows[0])
+  }
+
+  /**
+   * Reads a Collection Metadata object and its governing history log in one
+   * statement over the `collections` row, so a log append, which advances the
+   * object's local segment, is in both or in neither. Resolves `undefined`
+   * for an absent or tombstoned Collection.
+   * @param options {object}
+   * @param options.spaceId {string}
+   * @param options.collectionId {string}
+   * @returns {Promise<CollectionMetadataAndLog | undefined>}
+   */
+  async getCollectionMetadataAndLog({
+    spaceId,
+    collectionId
+  }: {
+    spaceId: string
+    collectionId: string
+  }): Promise<CollectionMetadataAndLog | undefined> {
+    const { rows } = await this.#reader().query<
+      MetadataRow<CollectionMetadata> & LogRow
+    >(
+      `SELECT ${METADATA_COLUMNS}, ${LOG_COLUMNS}
+         FROM collections
+        WHERE space_id = $1 AND collection_id = $2 AND NOT deleted`,
+      [spaceId, collectionId]
+    )
+    const collectionMetadata = storedMetadataFromRow(rows[0])
+    if (collectionMetadata === undefined) {
+      return undefined
+    }
+    const log = logResultFromRow(rows[0])
+    return { collectionMetadata, ...(log !== undefined && { log }) }
   }
 
   /**

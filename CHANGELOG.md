@@ -97,6 +97,18 @@
   `DATABASE_URL` secret, before either wipe, so a database the runner cannot
   reach stops the job with nothing wiped. It leaves the database as it is, with
   a warning, when that secret is unset.
+- With Postgres as the control plane, most Collection- and Resource-level
+  requests make one fewer Postgres round trip. These include every Resource and
+  chunk route, Read Collection Metadata, List Collection, Collection Query (the
+  `changes` feed included), Create Resource and Update Policy on a Resource.
+  Update Collection, the governed-log routes, Get Collection Linkset, Delete
+  Collection and every other policy route don't go through this read and are
+  unchanged. Such a request reads the Collection Metadata object and its
+  governing history log through the new optional
+  `StorageBackend.getCollectionMetadataAndLog`, which the Postgres backend
+  answers with one statement over the `collections` row where it took two, so a
+  log append is in both or in neither. A backend without the method is read as
+  before, the Metadata object first. No wire change.
 
 ### Fixed
 
