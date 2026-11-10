@@ -673,6 +673,16 @@ export interface CollectionLogResult {
 }
 
 /**
+ * A Collection Metadata object with its governing history log, as
+ * `StorageBackend.getCollectionMetadataAndLog` reads them together. `log` is
+ * absent when the Collection is not governed.
+ */
+export interface CollectionMetadataAndLog {
+  collectionMetadata: StoredCollectionMetadata
+  log?: CollectionLogResult
+}
+
+/**
  * The write-once recheck a Resource or chunk write runs inside its critical
  * section. The backend hands it the Collection's governing history log as
  * read under the write's lock (`undefined` when it has none), and it answers
@@ -1382,6 +1392,21 @@ export interface StorageBackend {
     spaceId: string
     collectionId: string
   }): Promise<CollectionLogResult | undefined>
+  /**
+   * OPTIONAL one-read form of `getCollectionMetadata` followed by
+   * `getCollectionLog`: the Collection Metadata object and its governing
+   * history log, read together, so a log append is in both or in neither.
+   * Resolves falsy when the Collection does not exist, a tombstoned Collection
+   * included, and omits `log` when the Collection has no log. The request
+   * layer's Collection prelude (`getCollectionOrThrow`) uses it when present,
+   * saving a read on every request that finds the Collection through it; a
+   * backend that omits it is read through the two methods, Metadata object
+   * first.
+   */
+  getCollectionMetadataAndLog?(options: {
+    spaceId: string
+    collectionId: string
+  }): Promise<CollectionMetadataAndLog | undefined>
   /**
    * Replaces a Collection's governing history log with `body` (the `/log`
    * transport's guarded create under `ifNoneMatch`, or its compare-and-swap

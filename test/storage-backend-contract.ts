@@ -4226,6 +4226,86 @@ export function describeStorageBackendContract(options: ContractOptions): void {
       )
     })
 
+    describe('getCollectionMetadataAndLog (the optional one-read form)', () => {
+      let harness: BackendHarness
+      const spaceId = 'space-metadata-and-log'
+      beforeAll(async () => {
+        harness = await makeBackend()
+        await provisionSpace(harness.backend, spaceId)
+      })
+      afterAll(async () => {
+        await harness.cleanup()
+      })
+
+      it("answers what getCollectionMetadata then getCollectionLog answer, through a Collection's whole life", async ({
+        skip
+      }) => {
+        const { backend } = harness
+        if (!backend.getCollectionMetadataAndLog) {
+          skip('the backend reads the Collection through the two methods')
+        }
+        const collectionId = 'one-read'
+        const read = () =>
+          backend.getCollectionMetadataAndLog!({ spaceId, collectionId })
+        // The two reads the one-read form replaces, Metadata object first,
+        // shaped as the one-read form answers: falsy for an absent
+        // Collection, and no `log` member for one that is not governed.
+        const readSeparately = async () => {
+          const collectionMetadata = await backend.getCollectionMetadata({
+            spaceId,
+            collectionId
+          })
+          if (!collectionMetadata) {
+            return undefined
+          }
+          const log = await backend.getCollectionLog({ spaceId, collectionId })
+          return { collectionMetadata, ...(log && { log }) }
+        }
+
+        // Absent: falsy, as every getter resolves for not-found.
+        assert.ok(!(await read()))
+        assert.ok(!(await readSeparately()))
+
+        // Live and not governed: the object with its validator, and no log
+        // member at all.
+        await backend.writeCollection({
+          spaceId,
+          collectionId,
+          collectionMetadata: {
+            id: collectionId,
+            type: ['Collection'],
+            name: 'One read'
+          }
+        })
+        const live = await read()
+        assert.deepStrictEqual(live, await readSeparately())
+        assert.equal('log' in live!, false)
+
+        // Governed: the log, beside the object whose local segment the log
+        // write advanced.
+        const logValidator = await backend.writeCollectionLog({
+          spaceId,
+          collectionId,
+          body: '{"state":{}}\n',
+          ifNoneMatch: '*'
+        })
+        const governed = await read()
+        assert.deepStrictEqual(governed, await readSeparately())
+        assert.ok(governed?.log)
+        assert.equal(governed.log.body, '{"state":{}}\n')
+        assert.equal(
+          formatEtag(governed.log.validator),
+          formatEtag(logValidator!)
+        )
+        assert.equal(governed.collectionMetadata.metaLocal, 1)
+
+        // Tombstoned: absent again.
+        await backend.deleteCollection({ spaceId, collectionId })
+        assert.ok(!(await read()))
+        assert.ok(!(await readSeparately()))
+      })
+    })
+
     describe('pagination', () => {
       let harness: BackendHarness
       const spaceId = 'space-page'
