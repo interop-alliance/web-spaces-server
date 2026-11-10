@@ -99,9 +99,10 @@
   a warning, when that secret is unset.
 - Breaking for custom backends: `StorageBackend` requires
   `getCollectionMetadataAndLogValidator`, which reads a Collection Metadata
-  object with the validator of its governing history log. The request layer
-  reads every Collection through it, so a subclass that overrides
-  `getCollectionMetadata` overrides it too. No wire change.
+  object with the validator of its governing history log. The Collection prelude
+  of the request layer reads through it, and other paths still call
+  `getCollectionMetadata`, so a subclass that overrides one overrides both. No
+  wire change.
 - With Postgres as the control plane, a request that finds its Collection
   through that read makes one fewer round trip. The log's body is read only when
   its descriptors are not cached. A `changes` page restamped from the control

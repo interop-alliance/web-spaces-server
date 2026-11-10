@@ -526,7 +526,8 @@ export class CollectionRequest {
                   serverUrl,
                   spaceId,
                   collectionId,
-                  log
+                  logValidator: log?.validator,
+                  readLog: async () => log
                 })
               : undefined,
             requestName

@@ -4392,7 +4392,10 @@ export class FileSystemBackend implements StorageBackend {
       return undefined
     }
     const log = await this.getCollectionLog({ spaceId, collectionId })
-    return { collectionMetadata, ...(log && { logValidator: log.validator }) }
+    return {
+      collectionMetadata,
+      ...(log !== undefined && { logValidator: log.validator })
+    }
   }
 
   /**
