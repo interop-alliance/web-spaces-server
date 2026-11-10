@@ -518,6 +518,10 @@ describe('Governing history log API (meta/log)', () => {
       const { collectionId, body, etag } = await governedCollection()
       const extended = body + entryLine({ ordinal: 2, state: twoEpochs }) + '\n'
       const storage = fastify.storage
+      // Cache the old head's descriptors, as a Collection in use has them.
+      // The racing read then takes its descriptors from the validator it
+      // read, with no second log read.
+      await alice.pws.request({ url: metaUrl(collectionId), method: 'GET' })
       const readMetadata = storage.getCollectionMetadata.bind(storage)
       const readLog = storage.getCollectionLog.bind(storage)
       // The racing read's log read lands an append right after it read the

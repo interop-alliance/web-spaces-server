@@ -54,7 +54,8 @@ import type {
   FeedDocument,
   PolicyDocument,
   SpaceMetadata,
-  StorageBackend
+  StorageBackend,
+  StoredCollectionMetadata
 } from '../types.js'
 
 /**
@@ -458,7 +459,7 @@ export async function mirrorCollectionPolicies({
  * the control plane,
  * with its `collection-metadata` and `log` documents carrying the control
  * plane's stamp and validator in place of the copy's, read off the control
- * plane once each per page. The feed position stays the data backend's,
+ * plane in one read per page. The feed position stays the data backend's,
  * since the copies take their positions in its one sequence. A `resource`
  * document is that backend's own, and a `policy` document already carries
  * the control plane's validator, which its copy was written under. A record
@@ -484,14 +485,24 @@ export async function restampFeedFromControlPlane({
   documents: FeedDocument[]
 }): Promise<FeedDocument[]> {
   const kinds = new Set(documents.map(doc => doc.kind))
-  const [metadata, log] = await Promise.all([
-    kinds.has('collection-metadata')
-      ? controlPlane.getCollectionMetadata({ spaceId, collectionId })
-      : undefined,
-    kinds.has('log')
-      ? controlPlane.getCollectionLog({ spaceId, collectionId })
-      : undefined
-  ])
+  // A page with a `log` document takes the log's validator and the Metadata
+  // object in one read, with no log body. A page with neither kind reads
+  // nothing.
+  let metadata: StoredCollectionMetadata | undefined
+  let logValidator: EtagValidator | undefined
+  if (kinds.has('log')) {
+    const stored = await controlPlane.getCollectionMetadataAndLogValidator({
+      spaceId,
+      collectionId
+    })
+    metadata = stored?.collectionMetadata
+    logValidator = stored?.logValidator
+  } else if (kinds.has('collection-metadata')) {
+    metadata = await controlPlane.getCollectionMetadata({
+      spaceId,
+      collectionId
+    })
+  }
   const metadataStamp = stampOf(metadata)
   return documents.map(doc => {
     if (
@@ -507,12 +518,12 @@ export async function restampFeedFromControlPlane({
         local: metadata.metaLocal ?? 0
       })
     }
-    if (doc.kind === 'log' && log !== undefined) {
+    if (doc.kind === 'log' && logValidator !== undefined) {
       return containerFeedDocument({
         kind: doc.kind,
         feedPosition: doc.feedPosition,
-        stamp: log.validator.stamp,
-        generation: log.validator.generation
+        stamp: logValidator.stamp,
+        generation: logValidator.generation
       })
     }
     return doc

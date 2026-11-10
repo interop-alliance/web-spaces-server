@@ -270,6 +270,7 @@ import type {
   ResourceMetadataWriteResult,
   ResourceWriteResult,
   CollectionLogResult,
+  CollectionMetadataAndLogValidator,
   ImmutableUnder,
   ListedSpaceMetadata,
   MetadataValidatorParts,
@@ -4359,6 +4360,39 @@ export class FileSystemBackend implements StorageBackend {
   }): Promise<CollectionLogResult | undefined> {
     const stored = await this.#readCollectionLog({ spaceId, collectionId })
     return stored && collectionLogResultOf(stored)
+  }
+
+  /**
+   * Reads a Collection Metadata object with the validator of its governing
+   * history log, in two reads: the Metadata object first, then the log. A log
+   * append advances the object's local segment, so its `ETag`. Read in the
+   * other order, a read racing an append could pair the new `ETag` with the
+   * validator of the old log, and every later conditional read would answer
+   * 304 over the stale descriptors. In this order the worst case is the old
+   * `ETag` over the new log, which the next revalidation replaces. The
+   * Metadata read is `getCollectionMetadata`, so it finishes a torn delete as
+   * that read does.
+   * @param options {object}
+   * @param options.spaceId {string}
+   * @param options.collectionId {string}
+   * @returns {Promise<CollectionMetadataAndLogValidator | undefined>}
+   */
+  async getCollectionMetadataAndLogValidator({
+    spaceId,
+    collectionId
+  }: {
+    spaceId: string
+    collectionId: string
+  }): Promise<CollectionMetadataAndLogValidator | undefined> {
+    const collectionMetadata = await this.getCollectionMetadata({
+      spaceId,
+      collectionId
+    })
+    if (!collectionMetadata) {
+      return undefined
+    }
+    const log = await this.getCollectionLog({ spaceId, collectionId })
+    return { collectionMetadata, ...(log && { logValidator: log.validator }) }
   }
 
   /**

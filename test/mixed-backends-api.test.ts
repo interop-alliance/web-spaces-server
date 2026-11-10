@@ -28,10 +28,12 @@ import { extractTarEntries } from '../src/lib/importTar.js'
 import type { TempFileSystemBackend } from '../src/testing.js'
 import type { CollectionMetadata, ReplicaRegistration } from '../src/types.js'
 import {
+  entryLine,
   genesisLine,
   oneEpoch,
   openTempBackend,
   openTempPostgres,
+  recipient,
   requestError,
   startTestServer,
   zcapClients
@@ -894,5 +896,84 @@ describe.skipIf(!connectionString)('Postgres as the default backend', () => {
       resourceId: 'r1'
     })
     assert.equal(held.storedResourceType, 'application/json')
+  })
+
+  it('serves a governed Collection from the control plane in one read, with the log body read only on a cache miss', async () => {
+    const spaceId = crypto.randomUUID()
+    await alice.pws.createSpace({
+      id: spaceId,
+      name: 'Governed on Postgres',
+      controller: alice.did
+    })
+    const metaUrl = new URL(
+      `/space/${spaceId}/governed/meta`,
+      baseServerUrl
+    ).toString()
+    const logUrl = new URL(
+      `/space/${spaceId}/governed/meta/log`,
+      baseServerUrl
+    ).toString()
+    await alice.pws.request({
+      url: metaUrl,
+      method: 'PUT',
+      json: { id: 'governed' }
+    })
+    const twoEpochs = {
+      ...oneEpoch,
+      currentEpoch: 'urn:epoch:2',
+      epochs: [
+        {
+          id: 'urn:epoch:2',
+          recipients: [recipient('did:key:zApp2#ka')]
+        },
+        ...oneEpoch.epochs
+      ]
+    }
+    const body = genesisLine(oneEpoch) + '\n'
+    const created = await alice.pws.request({
+      url: logUrl,
+      method: 'PUT',
+      headers: { 'content-type': 'text/jsonl', 'if-none-match': '*' },
+      body: new TextEncoder().encode(body)
+    })
+    const logEtag = created.headers.get('etag')!
+
+    const pairSpy = vi.spyOn(pgBackend, 'getCollectionMetadataAndLogValidator')
+    const metadataSpy = vi.spyOn(pgBackend, 'getCollectionMetadata')
+    const logSpy = vi.spyOn(pgBackend, 'getCollectionLog')
+    try {
+      // The first read derives the descriptors, so it reads the log's body.
+      const first = await alice.pws.request({ url: metaUrl, method: 'GET' })
+      assert.equal(first.data.encryption.currentEpoch, 'urn:epoch:1')
+      assert.equal(pairSpy.mock.calls.length, 1)
+      assert.equal(logSpy.mock.calls.length, 1)
+      // The second finds them cached under the validator it read.
+      const second = await alice.pws.request({ url: metaUrl, method: 'GET' })
+      assert.deepStrictEqual(second.data, first.data)
+      assert.equal(second.headers.get('etag'), first.headers.get('etag'))
+      assert.equal(pairSpy.mock.calls.length, 2)
+      assert.equal(logSpy.mock.calls.length, 1)
+      assert.equal(metadataSpy.mock.calls.length, 0)
+
+      // An append moves the validator, so the next read derives again and
+      // serves the new head under a new ETag.
+      await alice.pws.request({
+        url: logUrl,
+        method: 'PUT',
+        headers: { 'content-type': 'text/jsonl', 'if-match': logEtag },
+        body: new TextEncoder().encode(
+          body + entryLine({ ordinal: 2, state: twoEpochs }) + '\n'
+        )
+      })
+      logSpy.mockClear()
+      const third = await alice.pws.request({ url: metaUrl, method: 'GET' })
+      assert.equal(third.data.encryption.currentEpoch, 'urn:epoch:2')
+      assert.notEqual(third.headers.get('etag'), first.headers.get('etag'))
+      assert.equal(logSpy.mock.calls.length, 1)
+    } finally {
+      pairSpy.mockRestore()
+      metadataSpy.mockRestore()
+      logSpy.mockRestore()
+    }
   })
 })

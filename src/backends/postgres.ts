@@ -228,7 +228,7 @@ import type {
   ResourceWriteResult,
   StoredCollectionMetadata,
   CollectionLogResult,
-  CollectionMetadataAndLog,
+  CollectionMetadataAndLogValidator,
   ImmutableUnder,
   StoredCollectionLog,
   CollectionMetadataInput,
@@ -375,10 +375,16 @@ interface LogRow {
 }
 
 /**
+ * The columns of `LogRow` that hold the log's validator, selected alone by a
+ * read that does not need the body.
+ */
+const LOG_VALIDATOR_COLUMNS = `log_generation, log_updated_at,
+       log_updated_at_counter, log_origin_id`
+
+/**
  * The column list `LogRow` is selected by.
  */
-const LOG_COLUMNS = `log_body, log_generation, log_updated_at,
-       log_updated_at_counter, log_origin_id`
+const LOG_COLUMNS = `log_body, ${LOG_VALIDATOR_COLUMNS}`
 
 /**
  * The write stamp a row's three stamp columns hold.
@@ -621,6 +627,36 @@ function storedLogFromRow(
     updatedAtCounter: row.log_updated_at_counter,
     originId: row.log_origin_id
   }
+}
+
+/**
+ * The validator of a Collection row's governing history log, read off its
+ * validator columns alone, or `undefined` when the row holds no log (any of
+ * the columns is NULL) or does not exist. Every log write sets the body with
+ * these columns, so they decide whether the row holds a log.
+ * @param row {Omit<LogRow, 'log_body'> | undefined}
+ * @returns {EtagValidator | undefined}
+ */
+function logValidatorFromRow(
+  row: Omit<LogRow, 'log_body'> | undefined
+): EtagValidator | undefined {
+  if (
+    !row ||
+    row.log_generation === null ||
+    row.log_updated_at === null ||
+    row.log_updated_at_counter === null ||
+    row.log_origin_id === null
+  ) {
+    return undefined
+  }
+  return stampedValidator({
+    generation: row.log_generation,
+    stamp: {
+      updatedAt: row.log_updated_at,
+      updatedAtCounter: row.log_updated_at_counter,
+      originId: row.log_origin_id
+    }
+  })
 }
 
 /**
@@ -2077,20 +2113,17 @@ export class PostgresBackend implements StorageBackend {
       // edits cannot clobber one another). The history log columns ride
       // along for the transition checks, so they cost no second round trip
       // while the row lock is held.
-      const { rows } = await client.query<
-        MetadataRow<CollectionMetadata> & LogRow & { deleted: boolean }
-      >(
-        `SELECT ${METADATA_COLUMNS}, ${LOG_COLUMNS}, deleted
-           FROM collections
-          WHERE space_id = $1 AND collection_id = $2 FOR UPDATE`,
-        [spaceId, collectionId]
-      )
+      const row = await this.#lockCollectionRow({
+        client,
+        spaceId,
+        collectionId
+      })
       // A missing row is "no Collection yet": no generation and no stamp, so
       // the first write mints both. A tombstoned row is no Collection either
       // (its `metadata` is NULL), but its stamp is held: the create's stamp
       // must sort above the delete's.
-      const prior = storedMetadataFromRow(rows[0])
-      const tombstoneStamp = rows[0]?.deleted ? stampOfRow(rows[0]) : undefined
+      const prior = storedMetadataFromRow(row)
+      const tombstoneStamp = row?.deleted ? stampOfRow(row) : undefined
       // Guarded create (`If-None-Match: *`) or compare-and-swap (`If-Match`),
       // both opt-in: an existing Collection or a stale validator throws 412.
       // An unconditional write skips this.
@@ -2107,7 +2140,7 @@ export class PostgresBackend implements StorageBackend {
       const collectionMetadata = await resolveCollectionMetadataInput({
         input,
         prior,
-        readLog: async () => logResultFromRow(rows[0])
+        readLog: async () => logResultFromRow(row)
       })
       // Count quota (create path only): a create is no row or a tombstoned
       // row; writing one must not push the Space past
@@ -2298,26 +2331,28 @@ export class PostgresBackend implements StorageBackend {
   }
 
   /**
-   * Reads a Collection Metadata object and its governing history log in one
-   * statement over the `collections` row, so a log append, which advances the
-   * object's local segment, is in both or in neither. Resolves `undefined`
-   * for an absent or tombstoned Collection.
+   * Reads a Collection Metadata object and the validator of its governing
+   * history log in one statement over the `collections` row, so a log append,
+   * which advances the object's local segment, is in both or in neither. The
+   * log's body is not selected: it grows without bound, and a reader needs it
+   * only to derive descriptors it has not cached under the validator.
+   * Resolves `undefined` for an absent or tombstoned Collection.
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.collectionId {string}
-   * @returns {Promise<CollectionMetadataAndLog | undefined>}
+   * @returns {Promise<CollectionMetadataAndLogValidator | undefined>}
    */
-  async getCollectionMetadataAndLog({
+  async getCollectionMetadataAndLogValidator({
     spaceId,
     collectionId
   }: {
     spaceId: string
     collectionId: string
-  }): Promise<CollectionMetadataAndLog | undefined> {
+  }): Promise<CollectionMetadataAndLogValidator | undefined> {
     const { rows } = await this.#reader().query<
-      MetadataRow<CollectionMetadata> & LogRow
+      MetadataRow<CollectionMetadata> & Omit<LogRow, 'log_body'>
     >(
-      `SELECT ${METADATA_COLUMNS}, ${LOG_COLUMNS}
+      `SELECT ${METADATA_COLUMNS}, ${LOG_VALIDATOR_COLUMNS}
          FROM collections
         WHERE space_id = $1 AND collection_id = $2 AND NOT deleted`,
       [spaceId, collectionId]
@@ -2326,8 +2361,46 @@ export class PostgresBackend implements StorageBackend {
     if (collectionMetadata === undefined) {
       return undefined
     }
-    const log = logResultFromRow(rows[0])
-    return { collectionMetadata, ...(log !== undefined && { log }) }
+    const logValidator = logValidatorFromRow(rows[0])
+    return {
+      collectionMetadata,
+      ...(logValidator !== undefined && { logValidator })
+    }
+  }
+
+  /**
+   * Locks a Collection row, if any, and reads its Metadata, log and `deleted`
+   * columns under the lock. The one read both Collection-row writes that
+   * check the log start from. A tombstoned row is returned too: its
+   * `metadata` is NULL, so `storedMetadataFromRow` reads it as no Collection,
+   * while its stamp columns stay readable.
+   * @param options {object}
+   * @param options.client {pg.PoolClient}   the write's transaction
+   * @param options.spaceId {string}
+   * @param options.collectionId {string}
+   * @returns {Promise<(MetadataRow<CollectionMetadata> & LogRow & { deleted: boolean }) | undefined>}
+   */
+  async #lockCollectionRow({
+    client,
+    spaceId,
+    collectionId
+  }: {
+    client: pg.PoolClient
+    spaceId: string
+    collectionId: string
+  }): Promise<
+    | (MetadataRow<CollectionMetadata> & LogRow & { deleted: boolean })
+    | undefined
+  > {
+    const { rows } = await client.query<
+      MetadataRow<CollectionMetadata> & LogRow & { deleted: boolean }
+    >(
+      `SELECT ${METADATA_COLUMNS}, ${LOG_COLUMNS}, deleted
+         FROM collections
+        WHERE space_id = $1 AND collection_id = $2 FOR UPDATE`,
+      [spaceId, collectionId]
+    )
+    return rows[0]
   }
 
   /**
@@ -2368,16 +2441,11 @@ export class PostgresBackend implements StorageBackend {
     }) => void | Promise<void>
   }): Promise<EtagValidator | undefined> {
     return this.#withTransaction(async client => {
-      const { rows } = await client.query<
-        MetadataRow<CollectionMetadata> & LogRow
-      >(
-        `SELECT ${METADATA_COLUMNS}, ${LOG_COLUMNS}
-           FROM collections
-          WHERE space_id = $1 AND collection_id = $2
-          FOR UPDATE`,
-        [spaceId, collectionId]
-      )
-      const row = rows[0]
+      const row = await this.#lockCollectionRow({
+        client,
+        spaceId,
+        collectionId
+      })
       const collectionMetadata = storedMetadataFromRow(row)
       if (row === undefined || collectionMetadata === undefined) {
         return undefined

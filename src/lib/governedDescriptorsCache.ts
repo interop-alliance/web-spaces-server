@@ -21,7 +21,7 @@ import {
 } from '../config.default.js'
 import type { CollectionLogResult, StorageBackend } from '../types.js'
 import { backendScoped, deleteByPrefix } from './backendCache.js'
-import { formatEtag } from './etag.js'
+import { type EtagValidator, formatEtag } from './etag.js'
 import {
   type GovernedDescriptors,
   deriveGovernedDescriptors
@@ -146,20 +146,75 @@ export async function getCachedGovernedDescriptors({
   collectionId: string
   log?: CollectionLogResult
 }): Promise<GovernedDescriptors | undefined> {
-  if (!log) {
+  return await getCachedGovernedDescriptorsByValidator({
+    storage,
+    serverUrl,
+    spaceId,
+    collectionId,
+    logValidator: log?.validator,
+    readLog: async () => log
+  })
+}
+
+/**
+ * The descriptors of {@link getCachedGovernedDescriptors}, for a caller that
+ * holds the log's validator and not its body. The body is read through
+ * `readLog` only when the cache holds no entry under the validator, so a
+ * cached Collection costs no log read. `undefined` for no validator (an
+ * ungoverned Collection).
+ *
+ * The log `readLog` resolves may be newer than the validator, when an append
+ * landed in between. The entry is then the new head's descriptors under the
+ * old validator, which no later read presents, since each reads the
+ * validator again. A log that is gone by then (the Collection was deleted)
+ * derives nothing.
+ * @param options {object}
+ * @param options.storage {StorageBackend}   the backend the validator was
+ *   read from
+ * @param options.serverUrl {string}
+ * @param options.spaceId {string}
+ * @param options.collectionId {string}
+ * @param [options.logValidator] {EtagValidator}   the stored log's validator,
+ *   as read, if any
+ * @param options.readLog {Function}   reads the stored log on a cache miss
+ * @returns {Promise<GovernedDescriptors | undefined>}
+ */
+export async function getCachedGovernedDescriptorsByValidator({
+  storage,
+  serverUrl,
+  spaceId,
+  collectionId,
+  logValidator,
+  readLog
+}: {
+  storage: StorageBackend
+  serverUrl: string
+  spaceId: string
+  collectionId: string
+  logValidator?: EtagValidator
+  readLog: () => Promise<CollectionLogResult | undefined>
+}): Promise<GovernedDescriptors | undefined> {
+  if (!logValidator) {
     return undefined
   }
-  return await descriptorCaches.for(storage).memoize<GovernedDescriptors>({
-    key:
-      collectionKeyPrefix({ spaceId, collectionId }) +
-      formatEtag(log.validator),
-    fn: async () =>
-      deriveGovernedDescriptors({
-        body: log.body,
-        logUrl: absoluteUrl({
-          path: collectionLogPath({ spaceId, collectionId }),
-          serverUrl
+  return await descriptorCaches
+    .for(storage)
+    .memoize<GovernedDescriptors | undefined>({
+      key:
+        collectionKeyPrefix({ spaceId, collectionId }) +
+        formatEtag(logValidator),
+      fn: async () => {
+        const log = await readLog()
+        if (!log) {
+          return undefined
+        }
+        return deriveGovernedDescriptors({
+          body: log.body,
+          logUrl: absoluteUrl({
+            path: collectionLogPath({ spaceId, collectionId }),
+            serverUrl
+          })
         })
-      })
-  })
+      }
+    })
 }
