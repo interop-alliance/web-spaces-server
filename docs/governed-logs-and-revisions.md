@@ -108,7 +108,9 @@ It memoizes the `encryption` and `revisions` descriptors derived from a
 log-governed Collection's history log. It saves the parse, since the log is
 append-only and grows. On the request path it also saves the read of the log's
 body: `getCollectionOrThrow` reads the log's validator with the Metadata object
-and reads the body only when no entry is cached under that validator.
+and reads the body only when no entry is cached under that validator. The
+filesystem backend keeps the validator in the log file, so its validator read
+still reads the body.
 
 An entry is keyed by Collection and by the log's own four-segment `ETag`, so a
 log write leaves the old key behind and the next derivation misses on a new one.

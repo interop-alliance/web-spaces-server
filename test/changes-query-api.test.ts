@@ -29,7 +29,7 @@ import {
   oneEpoch,
   openTempBackend,
   parseEtagSegments,
-  recipient,
+  twoEpochs,
   startTestServer,
   zcapClients
 } from './helpers.js'
@@ -833,14 +833,6 @@ describe('Collection changes query profile', () => {
       )
 
       // An append.
-      const twoEpochs = {
-        ...oneEpoch,
-        currentEpoch: 'urn:epoch:2',
-        epochs: [
-          { id: 'urn:epoch:2', recipients: [recipient('did:key:zApp2#ka')] },
-          ...oneEpoch.epochs
-        ]
-      }
       const extended =
         genesis + entryLine({ ordinal: 2, state: twoEpochs }) + '\n'
       const appendedEtag = await putLog('kinds-log', extended, {

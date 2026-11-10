@@ -375,6 +375,11 @@ interface LogRow {
 }
 
 /**
+ * A row read by `LOG_VALIDATOR_COLUMNS`: the log columns without the body.
+ */
+type LogValidatorRow = Omit<LogRow, 'log_body'>
+
+/**
  * The columns of `LogRow` that hold the log's validator, selected alone by a
  * read that does not need the body.
  */
@@ -610,9 +615,25 @@ function storedMetadataFromRow<T extends object>(
 function storedLogFromRow(
   row: LogRow | undefined
 ): StoredCollectionLog | undefined {
+  const validatorFields = logValidatorFieldsFromRow(row)
+  if (!row || row.log_body === null || !validatorFields) {
+    return undefined
+  }
+  return { body: row.log_body, ...validatorFields }
+}
+
+/**
+ * The generation and write stamp a Collection row's log validator columns
+ * hold, or `undefined` when the row holds no log (any of the columns is NULL)
+ * or does not exist. The one place that rule is decided.
+ * @param row {LogValidatorRow | undefined}
+ * @returns {Omit<StoredCollectionLog, 'body'> | undefined}
+ */
+function logValidatorFieldsFromRow(
+  row: LogValidatorRow | undefined
+): Omit<StoredCollectionLog, 'body'> | undefined {
   if (
     !row ||
-    row.log_body === null ||
     row.log_generation === null ||
     row.log_updated_at === null ||
     row.log_updated_at_counter === null ||
@@ -621,7 +642,6 @@ function storedLogFromRow(
     return undefined
   }
   return {
-    body: row.log_body,
     generation: row.log_generation,
     updatedAt: row.log_updated_at,
     updatedAtCounter: row.log_updated_at_counter,
@@ -634,29 +654,18 @@ function storedLogFromRow(
  * validator columns alone, or `undefined` when the row holds no log (any of
  * the columns is NULL) or does not exist. Every log write sets the body with
  * these columns, so they decide whether the row holds a log.
- * @param row {Omit<LogRow, 'log_body'> | undefined}
+ * @param row {LogValidatorRow | undefined}
  * @returns {EtagValidator | undefined}
  */
 function logValidatorFromRow(
-  row: Omit<LogRow, 'log_body'> | undefined
+  row: LogValidatorRow | undefined
 ): EtagValidator | undefined {
-  if (
-    !row ||
-    row.log_generation === null ||
-    row.log_updated_at === null ||
-    row.log_updated_at_counter === null ||
-    row.log_origin_id === null
-  ) {
+  const validatorFields = logValidatorFieldsFromRow(row)
+  if (!validatorFields) {
     return undefined
   }
-  return stampedValidator({
-    generation: row.log_generation,
-    stamp: {
-      updatedAt: row.log_updated_at,
-      updatedAtCounter: row.log_updated_at_counter,
-      originId: row.log_origin_id
-    }
-  })
+  const { generation, ...stamp } = validatorFields
+  return stampedValidator({ generation, stamp })
 }
 
 /**
@@ -2350,7 +2359,7 @@ export class PostgresBackend implements StorageBackend {
     collectionId: string
   }): Promise<CollectionMetadataAndLogValidator | undefined> {
     const { rows } = await this.#reader().query<
-      MetadataRow<CollectionMetadata> & Omit<LogRow, 'log_body'>
+      MetadataRow<CollectionMetadata> & LogValidatorRow
     >(
       `SELECT ${METADATA_COLUMNS}, ${LOG_VALIDATOR_COLUMNS}
          FROM collections

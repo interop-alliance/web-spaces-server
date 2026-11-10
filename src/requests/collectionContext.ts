@@ -14,10 +14,7 @@ import { DEFAULT_BACKEND_ID } from '../lib/serverBackends.js'
 import { parseKeyEpochHeader } from '../lib/keyEpoch.js'
 import { stripMetadataValidator } from '../lib/metadataValidator.js'
 import { parseWriterIdHeader } from '../lib/writerAttribution.js'
-import {
-  getCachedGovernedDescriptors,
-  getCachedGovernedDescriptorsByValidator
-} from '../lib/governedDescriptorsCache.js'
+import { getCachedGovernedDescriptors } from '../lib/governedDescriptorsCache.js'
 import { collectionPath, linksetPath } from '../lib/paths.js'
 import { isImmutableCollection } from '../lib/revisions.js'
 import { CollectionNotFoundError, ResourceNotFoundError } from '../errors.js'
@@ -109,14 +106,11 @@ export async function getCollectionOrThrow({
     spaceId,
     collectionId
   })
-  // A getter resolves falsy for not-found, not only `undefined`.
   if (!stored) {
     throw new CollectionNotFoundError({ requestName })
   }
   const { collectionMetadata, logValidator } = stored
-  // The log's body is read only when the descriptors are not cached under
-  // its validator.
-  const governed = await getCachedGovernedDescriptorsByValidator({
+  const governed = await getCachedGovernedDescriptors({
     storage,
     serverUrl,
     spaceId,
@@ -176,7 +170,8 @@ export function writeOnceOptions({
         serverUrl,
         spaceId,
         collectionId,
-        log
+        logValidator: log?.validator,
+        readLog: async () => log
       })
       return isImmutableCollection(governed ?? {})
     }

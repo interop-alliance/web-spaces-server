@@ -20,7 +20,7 @@ import {
   oneEpoch,
   parseEtagSegments,
   openTempBackend,
-  recipient,
+  twoEpochs,
   responseOf,
   startTestServer,
   zcapClients
@@ -32,15 +32,6 @@ const envelope = {
   sequence: 0,
   indexed: [],
   jwe: { protected: 'eyJhbGciOiJkaXI', ciphertext: 'c1phertext' }
-}
-
-const twoEpochs = {
-  ...oneEpoch,
-  currentEpoch: 'urn:epoch:2',
-  epochs: [
-    { id: 'urn:epoch:2', recipients: [recipient('did:key:zApp2#ka')] },
-    ...oneEpoch.epochs
-  ]
 }
 
 describe('Governing history log API (meta/log)', () => {

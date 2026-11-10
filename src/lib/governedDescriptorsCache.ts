@@ -120,48 +120,15 @@ export function invalidateSpaceGovernedDescriptors({
  * The descriptors a stored history log derives, read through the per-backend
  * memoization cache: the `encryption` member (the log head's `state` without
  * its `revisions` slot, with `history: { method, resource }` stamped on) and
- * the `revisions` member (that slot, when present). `undefined` for no log
- * (an ungoverned Collection). The caller has already read the log (the body and
- * its validator); only the parse is saved here. A stored log the parser
- * rejects is a server-side fault (`StorageError`, 500), and a rejected
- * derivation is not retained.
- * @param options {object}
- * @param options.storage {StorageBackend}   the backend the log was read from
- * @param options.serverUrl {string}
- * @param options.spaceId {string}
- * @param options.collectionId {string}
- * @param [options.log] {CollectionLogResult}   the stored log, as read, if any
- * @returns {Promise<GovernedDescriptors | undefined>}
- */
-export async function getCachedGovernedDescriptors({
-  storage,
-  serverUrl,
-  spaceId,
-  collectionId,
-  log
-}: {
-  storage: StorageBackend
-  serverUrl: string
-  spaceId: string
-  collectionId: string
-  log?: CollectionLogResult
-}): Promise<GovernedDescriptors | undefined> {
-  return await getCachedGovernedDescriptorsByValidator({
-    storage,
-    serverUrl,
-    spaceId,
-    collectionId,
-    logValidator: log?.validator,
-    readLog: async () => log
-  })
-}
-
-/**
- * The descriptors of {@link getCachedGovernedDescriptors}, for a caller that
- * holds the log's validator and not its body. The body is read through
- * `readLog` only when the cache holds no entry under the validator, so a
- * cached Collection costs no log read. `undefined` for no validator (an
- * ungoverned Collection).
+ * the `revisions` member (that slot, when present). `undefined` for no
+ * validator (an ungoverned Collection). A stored log the parser rejects is a
+ * server-side fault (`StorageError`, 500), and a rejected derivation is not
+ * retained.
+ *
+ * The caller holds the log's validator. The body is read through `readLog`
+ * only when the cache holds no entry under the validator, so a cached
+ * Collection costs no log read. A caller that already holds the log passes
+ * `readLog: async () => log`, and saves the parse.
  *
  * The log `readLog` resolves may be newer than the validator, when an append
  * landed in between. The entry is then the new head's descriptors under the
@@ -179,7 +146,7 @@ export async function getCachedGovernedDescriptors({
  * @param options.readLog {Function}   reads the stored log on a cache miss
  * @returns {Promise<GovernedDescriptors | undefined>}
  */
-export async function getCachedGovernedDescriptorsByValidator({
+export async function getCachedGovernedDescriptors({
   storage,
   serverUrl,
   spaceId,

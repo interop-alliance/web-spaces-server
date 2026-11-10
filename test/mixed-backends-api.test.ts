@@ -33,7 +33,7 @@ import {
   oneEpoch,
   openTempBackend,
   openTempPostgres,
-  recipient,
+  twoEpochs,
   requestError,
   startTestServer,
   zcapClients
@@ -918,17 +918,6 @@ describe.skipIf(!connectionString)('Postgres as the default backend', () => {
       method: 'PUT',
       json: { id: 'governed' }
     })
-    const twoEpochs = {
-      ...oneEpoch,
-      currentEpoch: 'urn:epoch:2',
-      epochs: [
-        {
-          id: 'urn:epoch:2',
-          recipients: [recipient('did:key:zApp2#ka')]
-        },
-        ...oneEpoch.epochs
-      ]
-    }
     const body = genesisLine(oneEpoch) + '\n'
     const created = await alice.pws.request({
       url: logUrl,

@@ -895,6 +895,18 @@ export const oneEpoch = {
 }
 
 /**
+ * `oneEpoch` after a second epoch was added and made current.
+ */
+export const twoEpochs = {
+  ...oneEpoch,
+  currentEpoch: 'urn:epoch:2',
+  epochs: [
+    { id: 'urn:epoch:2', recipients: [recipient('did:key:zApp2#ka')] },
+    ...oneEpoch.epochs
+  ]
+}
+
+/**
  * A governing history log entry line: the profile's members with `state` as
  * given.
  * @param options {object}
