@@ -4226,7 +4226,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
       )
     })
 
-    describe('getCollectionMetadataAndLog (the optional one-read form)', () => {
+    describe('getCollectionMetadataAndLogValidator', () => {
       let harness: BackendHarness
       const spaceId = 'space-metadata-and-log'
       beforeAll(async () => {
@@ -4237,72 +4237,130 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         await harness.cleanup()
       })
 
-      it("answers what getCollectionMetadata then getCollectionLog answer, through a Collection's whole life", async ({
-        skip
-      }) => {
+      it("answers the Metadata object and the log's validator through a Collection's whole life", async () => {
         const { backend } = harness
-        if (!backend.getCollectionMetadataAndLog) {
-          skip('the backend reads the Collection through the two methods')
-        }
         const collectionId = 'one-read'
-        const read = () =>
-          backend.getCollectionMetadataAndLog!({ spaceId, collectionId })
-        // The two reads the one-read form replaces, Metadata object first,
-        // shaped as the one-read form answers: falsy for an absent
-        // Collection, and no `log` member for one that is not governed.
-        const readSeparately = async () => {
-          const collectionMetadata = await backend.getCollectionMetadata({
-            spaceId,
-            collectionId
-          })
-          if (!collectionMetadata) {
-            return undefined
+        const at = { spaceId, collectionId }
+        const collectionMetadata = {
+          id: collectionId,
+          type: ['Collection'],
+          name: 'One read'
+        }
+        const read = () => backend.getCollectionMetadataAndLogValidator(at)
+        // What the two getters answer for the same Collection, which the
+        // read must agree with at every step.
+        const expectAgreement = async (
+          stored: Awaited<ReturnType<typeof read>>
+        ) => {
+          const metadata = await backend.getCollectionMetadata(at)
+          const log = await backend.getCollectionLog(at)
+          if (!metadata) {
+            assert.ok(!stored)
+            return
           }
-          const log = await backend.getCollectionLog({ spaceId, collectionId })
-          return { collectionMetadata, ...(log && { log }) }
+          assert.deepStrictEqual(stored?.collectionMetadata, metadata)
+          assert.equal(
+            stored.logValidator && formatEtag(stored.logValidator),
+            log && formatEtag(log.validator)
+          )
         }
 
         // Absent: falsy, as every getter resolves for not-found.
         assert.ok(!(await read()))
-        assert.ok(!(await readSeparately()))
 
-        // Live and not governed: the object with its validator, and no log
-        // member at all.
-        await backend.writeCollection({
-          spaceId,
-          collectionId,
-          collectionMetadata: {
-            id: collectionId,
-            type: ['Collection'],
-            name: 'One read'
-          }
-        })
+        // Live and not governed: the object, and no validator member at all.
+        await backend.writeCollection({ ...at, collectionMetadata })
         const live = await read()
-        assert.deepStrictEqual(live, await readSeparately())
-        assert.equal('log' in live!, false)
+        await expectAgreement(live)
+        assert.equal('logValidator' in live!, false)
+        // The log's body is not part of the answer.
+        assert.deepStrictEqual(Object.keys(live!), ['collectionMetadata'])
 
-        // Governed: the log, beside the object whose local segment the log
-        // write advanced.
-        const logValidator = await backend.writeCollectionLog({
-          spaceId,
-          collectionId,
+        // Governed: the validator of the log write, beside the object whose
+        // local segment that write advanced.
+        const created = await backend.writeCollectionLog({
+          ...at,
           body: '{"state":{}}\n',
           ifNoneMatch: '*'
         })
         const governed = await read()
-        assert.deepStrictEqual(governed, await readSeparately())
-        assert.ok(governed?.log)
-        assert.equal(governed.log.body, '{"state":{}}\n')
-        assert.equal(
-          formatEtag(governed.log.validator),
-          formatEtag(logValidator!)
-        )
-        assert.equal(governed.collectionMetadata.metaLocal, 1)
+        await expectAgreement(governed)
+        assert.equal(formatEtag(governed!.logValidator!), formatEtag(created!))
+        assert.equal(governed!.collectionMetadata.metaLocal, 1)
+        assert.equal('log' in governed!, false)
+
+        // A second append: the new validator, and the segment advanced again.
+        const appended = await backend.writeCollectionLog({
+          ...at,
+          body: '{"state":{}}\n{"state":{"n":2}}\n',
+          ifMatch: formatEtag(created!)
+        })
+        const grown = await read()
+        await expectAgreement(grown)
+        assert.equal(formatEtag(grown!.logValidator!), formatEtag(appended!))
+        assert.notEqual(formatEtag(appended!), formatEtag(created!))
+        assert.equal(grown!.collectionMetadata.metaLocal, 2)
 
         // Tombstoned: absent again.
-        await backend.deleteCollection({ spaceId, collectionId })
+        await backend.deleteCollection(at)
         assert.ok(!(await read()))
-        assert.ok(!(await readSeparately()))
+        await expectAgreement(undefined)
+
+        // Re-created over the tombstone: a new life, with no validator left
+        // from the log of the old one.
+        await backend.writeCollection({ ...at, collectionMetadata })
+        const recreated = await read()
+        await expectAgreement(recreated)
+        assert.equal('logValidator' in recreated!, false)
+        assert.notEqual(
+          recreated!.collectionMetadata.metaGeneration,
+          grown!.collectionMetadata.metaGeneration
+        )
+      })
+
+      it('never pairs the advanced local segment with the validator of the log before the append', async () => {
+        const { backend } = harness
+        const collectionId = 'one-read-race'
+        const at = { spaceId, collectionId }
+        await backend.writeCollection({
+          ...at,
+          collectionMetadata: { id: collectionId, type: ['Collection'] }
+        })
+        let body = '{"state":{}}\n'
+        let validator = (await backend.writeCollectionLog({
+          ...at,
+          body,
+          ifNoneMatch: '*'
+        }))!
+        // The validator each local segment was advanced to.
+        const validatorAt = new Map([[1, formatEtag(validator)]])
+        for (let round = 2; round <= 6; round++) {
+          body += `{"state":{"n":${round}}}\n`
+          const [written, ...reads] = await Promise.all([
+            backend.writeCollectionLog({
+              ...at,
+              body,
+              ifMatch: formatEtag(validator)
+            }),
+            ...Array.from({ length: 8 }, () =>
+              backend.getCollectionMetadataAndLogValidator(at)
+            )
+          ])
+          validator = written!
+          validatorAt.set(round, formatEtag(validator))
+          for (const stored of reads) {
+            const local = stored!.collectionMetadata.metaLocal!
+            const seen = formatEtag(stored!.logValidator!)
+            // A read holds the validator its segment was advanced to, or
+            // the one after it, when the append landed between its two
+            // reads. It does not hold an earlier one.
+            assert.ok(
+              seen === validatorAt.get(local) ||
+                seen === validatorAt.get(local + 1),
+              `segment ${local} beside the validator ${seen}`
+            )
+          }
+        }
       })
     })
 

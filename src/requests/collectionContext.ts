@@ -14,7 +14,10 @@ import { DEFAULT_BACKEND_ID } from '../lib/serverBackends.js'
 import { parseKeyEpochHeader } from '../lib/keyEpoch.js'
 import { stripMetadataValidator } from '../lib/metadataValidator.js'
 import { parseWriterIdHeader } from '../lib/writerAttribution.js'
-import { getCachedGovernedDescriptors } from '../lib/governedDescriptorsCache.js'
+import {
+  getCachedGovernedDescriptors,
+  getCachedGovernedDescriptorsByValidator
+} from '../lib/governedDescriptorsCache.js'
 import { collectionPath, linksetPath } from '../lib/paths.js'
 import { isImmutableCollection } from '../lib/revisions.js'
 import { CollectionNotFoundError, ResourceNotFoundError } from '../errors.js'
@@ -22,7 +25,6 @@ import { withStorageErrors } from '../lib/storageErrors.js'
 import type {
   ChunkMetadata,
   CollectionMetadata,
-  CollectionMetadataAndLog,
   ImmutableUnder,
   ResourceMetadata,
   StorageBackend,
@@ -77,7 +79,8 @@ export function projectCollectionMetadata({
  * `encryption` for such a Collection; a direct write of the member is
  * refused. A stored `revisions` member is replaced by the derived one, and
  * dropped when the head carries none. The derivation is memoized per backend
- * by the log's validator (`lib/governedDescriptorsCache.ts`). Update
+ * by the log's validator (`lib/governedDescriptorsCache.ts`), which is read
+ * with the object, so the log's body is read only on a cache miss. Update
  * Collection reads the stored object directly instead, since it must not
  * persist the derived members, and its recheck under the backend's lock calls
  * `getCachedGovernedDescriptors` with the lock-consistent log.
@@ -102,21 +105,24 @@ export async function getCollectionOrThrow({
   requestName: string
 }): Promise<StoredCollectionMetadata> {
   const { storage, serverUrl } = request.server
-  const metadataAndLog = await readCollectionMetadataAndLog({
-    storage,
+  const stored = await storage.getCollectionMetadataAndLogValidator({
     spaceId,
     collectionId
   })
-  if (!metadataAndLog) {
+  // A getter resolves falsy for not-found, not only `undefined`.
+  if (!stored) {
     throw new CollectionNotFoundError({ requestName })
   }
-  const { collectionMetadata, log } = metadataAndLog
-  const governed = await getCachedGovernedDescriptors({
+  const { collectionMetadata, logValidator } = stored
+  // The log's body is read only when the descriptors are not cached under
+  // its validator.
+  const governed = await getCachedGovernedDescriptorsByValidator({
     storage,
     serverUrl,
     spaceId,
     collectionId,
-    log
+    logValidator,
+    readLog: () => storage.getCollectionLog({ spaceId, collectionId })
   })
   if (governed === undefined) {
     return collectionMetadata
@@ -127,51 +133,6 @@ export async function getCollectionOrThrow({
     encryption: governed.encryption,
     ...(governed.revisions !== undefined && { revisions: governed.revisions })
   }
-}
-
-/**
- * Reads a Collection Metadata object and its governing history log, in one
- * read when the backend offers `getCollectionMetadataAndLog`, else the
- * Metadata object first and then the log. Either way the answer has the
- * method's shape: falsy when the Collection does not exist (the two-read form
- * then skips the log), and no `log` member when it is not governed.
- *
- * The two-read form keeps that order. The Metadata object is read before the
- * log, not beside it. A log append advances the object's local segment, so
- * its `ETag`. Read in the other order, a read racing an append could pair the
- * new `ETag` with the old log head, and every later conditional read would
- * answer 304 over the stale descriptors. In this order the worst case is the
- * old `ETag` over the new descriptors, which the next revalidation replaces.
- * The one-read form takes both in a single statement, so a log append is in
- * both or in neither.
- * @param options {object}
- * @param options.storage {StorageBackend}
- * @param options.spaceId {string}
- * @param options.collectionId {string}
- * @returns {Promise<CollectionMetadataAndLog | undefined>}
- */
-async function readCollectionMetadataAndLog({
-  storage,
-  spaceId,
-  collectionId
-}: {
-  storage: StorageBackend
-  spaceId: string
-  collectionId: string
-}): Promise<CollectionMetadataAndLog | undefined> {
-  if (storage.getCollectionMetadataAndLog) {
-    return await storage.getCollectionMetadataAndLog({ spaceId, collectionId })
-  }
-  const collectionMetadata = await storage.getCollectionMetadata({
-    spaceId,
-    collectionId
-  })
-  // A getter resolves falsy for not-found, not only `undefined`.
-  if (!collectionMetadata) {
-    return undefined
-  }
-  const log = await storage.getCollectionLog({ spaceId, collectionId })
-  return { collectionMetadata, ...(log && { log }) }
 }
 
 /**

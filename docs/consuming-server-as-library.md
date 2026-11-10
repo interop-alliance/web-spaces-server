@@ -250,6 +250,10 @@ package's second contract, alongside the wire protocol). The contract and its
 invariants are documented on the interface itself; the load-bearing ones:
 
 - getters resolve falsy for not-found (they do not throw);
+- the request layer reads a Collection through
+  `getCollectionMetadataAndLogValidator`, not through `getCollectionMetadata`. A
+  subclass that filters or instruments Collection reads overrides that method
+  too;
 - writes are upserts; deletes are idempotent;
 - throw the package's typed errors (`PreconditionFailedError`,
   `PayloadTooLargeError`, ...) so the request layer's error handler maps them to

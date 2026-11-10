@@ -259,7 +259,7 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   policy copy after every policy write and delete, and Import Space copies the
   policies it stored after the control plane's import. Reads never consult a
   copy. The feed's `collection-metadata` and `log` documents are restamped from
-  the control plane's records (`restampFeedFromControlPlane`, two reads per page
+  the control plane's records (`restampFeedFromControlPlane`, one read per page
   at most), while a policy copy is written through `applyPolicy` under the
   control plane's own generation and stamp, with no registration, so its feed
   document is served as is and a tombstone copy lands over an absent copy too.

@@ -105,8 +105,10 @@ Collection Metadata writes through the same per-Collection lock.
 
 `src/lib/governedDescriptorsCache.ts` is a read cache, one per storage backend.
 It memoizes the `encryption` and `revisions` descriptors derived from a
-log-governed Collection's history log. The parse is what it saves, since the log
-is append-only and grows. The log body is still read on each request.
+log-governed Collection's history log. It saves the parse, since the log is
+append-only and grows. On the request path it also saves the read of the log's
+body: `getCollectionOrThrow` reads the log's validator with the Metadata object
+and reads the body only when no entry is cached under that validator.
 
 An entry is keyed by Collection and by the log's own four-segment `ETag`, so a
 log write leaves the old key behind and the next derivation misses on a new one.

@@ -673,13 +673,13 @@ export interface CollectionLogResult {
 }
 
 /**
- * A Collection Metadata object with its governing history log, as
- * `StorageBackend.getCollectionMetadataAndLog` reads them together. `log` is
- * absent when the Collection is not governed.
+ * A Collection Metadata object with the validator of its governing history
+ * log, as `StorageBackend.getCollectionMetadataAndLogValidator` reads them
+ * together. `logValidator` is absent when the Collection is not governed.
  */
-export interface CollectionMetadataAndLog {
+export interface CollectionMetadataAndLogValidator {
   collectionMetadata: StoredCollectionMetadata
-  log?: CollectionLogResult
+  logValidator?: EtagValidator
 }
 
 /**
@@ -1393,20 +1393,22 @@ export interface StorageBackend {
     collectionId: string
   }): Promise<CollectionLogResult | undefined>
   /**
-   * OPTIONAL one-read form of `getCollectionMetadata` followed by
-   * `getCollectionLog`: the Collection Metadata object and its governing
-   * history log, read together, so a log append is in both or in neither.
-   * Resolves falsy when the Collection does not exist, a tombstoned Collection
-   * included, and omits `log` when the Collection has no log. The request
-   * layer's Collection prelude (`getCollectionOrThrow`) uses it when present,
-   * saving a read on every request that finds the Collection through it; a
-   * backend that omits it is read through the two methods, Metadata object
-   * first.
+   * Reads a Collection Metadata object with the validator of its governing
+   * history log, and not the log's body. Resolves falsy when the Collection
+   * does not exist, a tombstoned Collection included, and omits
+   * `logValidator` when the Collection has no log. The request layer's
+   * Collection prelude (`getCollectionOrThrow`) reads every Collection
+   * through it.
+   *
+   * A log append advances the object's local segment, so the pair must not
+   * hold the advanced segment beside the validator of the log before the
+   * append. A backend reads both at one point in time, or else the Metadata
+   * object first and the log second.
    */
-  getCollectionMetadataAndLog?(options: {
+  getCollectionMetadataAndLogValidator(options: {
     spaceId: string
     collectionId: string
-  }): Promise<CollectionMetadataAndLog | undefined>
+  }): Promise<CollectionMetadataAndLogValidator | undefined>
   /**
    * Replaces a Collection's governing history log with `body` (the `/log`
    * transport's guarded create under `ifNoneMatch`, or its compare-and-swap
