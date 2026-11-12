@@ -656,16 +656,23 @@ describe('the client-annex clause admits a ladder-signed replica pull under a po
         assert.equal(listed.statusCode, 200, listed.payload)
       })
 
-      it('admits the {GET, HEAD} set, and reaches the changes feed under it (200)', async () => {
-        const capability = await ladderGrant({
-          acct,
-          allowedActions: ['GET', 'HEAD']
-        })
+      it('reaches the changes feed under the GET grant (200)', async () => {
         const feed = await invokeAsMirror({
           path: '/space/acct/id/query?profile=changes',
-          capability
+          capability: await ladderGrant({ acct })
         })
         assert.equal(feed.statusCode, 200, feed.payload)
+      })
+
+      it('refuses a set carrying HEAD, which is not an action (404)', async () => {
+        const refused = await invokeAsMirror({
+          path: '/space/acct/',
+          capability: await ladderGrant({
+            acct,
+            allowedActions: ['GET', 'HEAD']
+          })
+        })
+        assert.equal(refused.statusCode, 404, refused.payload)
       })
 
       it('refuses a set carrying POST (404)', async () => {
@@ -1145,15 +1152,23 @@ describe('the client-annex clause admits a ladder-signed replica pull under a po
         assert.equal(refused.statusCode, 404, refused.payload)
       })
 
-      it('admits HEAD, which every GET route answers (200)', async () => {
+      it('admits HEAD under a GET-only grant, signed as GET (200)', async () => {
         const read = await asSession({
           path: `/space/${spaceId}/replicas`,
           method: 'HEAD',
+          capability: await maintenanceGrant({ allowedActions: ['GET'] })
+        })
+        assert.equal(read.statusCode, 200, read.payload)
+      })
+
+      it('refuses a set carrying HEAD, which is not an action (404)', async () => {
+        const refused = await asSession({
+          path: `/space/${spaceId}/replicas`,
           capability: await maintenanceGrant({
             allowedActions: ['GET', 'HEAD']
           })
         })
-        assert.equal(read.statusCode, 200, read.payload)
+        assert.equal(refused.statusCode, 404, refused.payload)
       })
 
       it('refuses a set carrying a verb the routes do not serve (404)', async () => {

@@ -409,8 +409,9 @@ export class CollectionRequest {
    * when none exists under the id (201, `Location` naming the Collection
    * container) and reconfigures it otherwise (204). A writable member the
    * body omits is cleared, with the spec's exceptions (`plaintext` is kept,
-   * the set-once `encryption` may not be dropped, the read-only members are
-   * ignored); the composition rules live in `composeCollectionMetadata`. One
+   * the creation-only `encryption` may not be added or dropped, the read-only
+   * members are ignored); the composition rules live in
+   * `composeCollectionMetadata`. One
    * `ETag` covers the object, so `If-None-Match: *` is the guarded create and
    * `If-Match` the compare-and-swap on it. Authorization is capability-only
    * (the `PUT` action) against the `meta` URL; a capability on the Collection
@@ -465,7 +466,8 @@ export class CollectionRequest {
     // capability invocation; no access-control-policy fallback. No container
     // rule here: a grant on the Space subtree, on the Collection container
     // URL, or on this Metadata URL all write the object, so an app holding a
-    // Collection-scoped grant can declare its own indexes and `encryption`.
+    // Collection-scoped grant can declare its own indexes, and its
+    // `encryption` when the write creates the Collection.
     // Delete Collection stays controller-only, and the sibling `meta/log`
     // write keeps the Space-subtree rule.
     await fetchSpaceAndVerify({

@@ -67,8 +67,8 @@ const DELEGATED_CLIENTS_SERVICE_TYPE = 'https://w3id.org/byoe#DelegatedClients'
 /** The auxiliary Space's full type array, as a wallet would send it. */
 const AUXILIARY_TYPE = ['AuxiliarySpace', 'DelegatedClientsSpace', 'Space']
 
-/** The closed PWS verb vocabulary a generation delegation carries. */
-const WAS_ACTIONS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE']
+/** The closed PWS action vocabulary a generation delegation carries. */
+const WAS_ACTIONS = ['GET', 'POST', 'PUT', 'DELETE']
 
 describe('client-annex clause (ladder-VM delegation bounds)', () => {
   let fastify: FastifyInstance, baseServerUrl: string, alice: any, bob: any

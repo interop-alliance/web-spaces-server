@@ -7448,3 +7448,53 @@ twice. Whether export signs the stored digest or keeps hashing the archived
 bytes is open, since a stored value does not detect damaged bytes. The
 write-time statements of WSS-184 need a digest at write time and would read this
 one.
+
+---
+
+### WSS-194: [M] (*) `encryption` is declared only when the Collection is created
+
+- status: done
+- done: 2026-11-12
+- priority: medium
+- backend: *
+- labels: collection-metadata, encryption, wire-contract
+- discovered-from: WSS-173 (2026-10-03)
+- touches:
+  - portable-web-spaces-spec: WASS-49 (the sentence permitting a declaration on
+    a Collection that lacks one is withdrawn); shipped 2026-10-29, spec.md
+    carries the "Creation-only members" subsection and the
+    `encryption-immutable` registry row and example naming the late declaration
+  - pws-client: the `edv` branch of `sync/provisioning.ts`, which declares
+    `encryption` on an existing Collection, is removed; WCL-142 (filed
+    2026-10-29, blocked on this item, still todo)
+  - was-react: `markCollectionEncrypted` is removed (shipped in 0.28.0,
+    2026-10-11)
+  - dcw: the sync smoke test is checked for the `edv` default; checked
+    2026-11-12, unaffected: `app/lib/sync/smokeTest.ts` calls
+    `ensureSpaceAndCollection` with the `edv` default, which declares the
+    descriptor on its guarded create, and a rerun finds it already declared
+  - conformance-suite: a case for the late-declaration refusal; not filed.
+    PWSCS-19 covers the `revisions` half and leaves the `encryption` case to
+    this item. The suite's optional `plaintext.both-on-update-400` case adds
+    `encryption` to an existing plaintext-declared Collection and expects 400;
+    it now gets 409
+- acceptance:
+  - [x] An Update Collection that adds `encryption` to an existing Collection
+        that lacks one is refused with `encryption-immutable` (409); Create
+        Collection, a create by `PUT .../meta`, and a governing log's guarded
+        create still declare it
+  - [x] `assertEncryptionDescriptorTransition`, `assertEncryptionTransition`,
+        and the `EncryptionImmutableError` comment no longer describe late
+        declaration as allowed
+  - [x] Tests that declare `encryption` on an existing Collection are rewritten
+        to declare it at creation, and a test pins the refusal
+  - [x] ARCHITECTURE.md and CHANGELOG.md updated
+
+Context: spec decision 0012 makes the immutable Collection descriptors
+creation-only. Under replication, a late first set of `encryption` on one server
+and a concurrent full replacement without it on another both pass their own
+transition check, and last-writer-wins converges on an object with `encryption`
+gone. WSS-173 shipped the `revisions` half of the rule. This item is the
+`encryption` half. It removes a path pws-client and was-react still use as
+fallbacks, so it lands with their removal. The App Connect flow already creates
+its Collections encrypted from birth.

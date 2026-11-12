@@ -21,6 +21,7 @@ import {
   ReplicaRefusedError
 } from '../errors.js'
 import { actionsWithin } from '../lib/chainCapability.js'
+import { generationOfEtag } from '../lib/etag.js'
 import { isPlainObject } from '../lib/isPlainObject.js'
 import { mapInBatches } from '../lib/mapInBatches.js'
 import { cursorOfNextUrl } from '../lib/pagination.js'
@@ -72,7 +73,7 @@ import type { ServerBackends } from '../lib/serverBackends.js'
 /**
  * The actions a pull capability may carry. The loop only reads.
  */
-const PULL_ACTIONS = ['GET', 'HEAD']
+const PULL_ACTIONS = ['GET']
 
 /**
  * An absolute URL for a path on the peer's server, resolved against the
@@ -213,7 +214,7 @@ export function parseReplicaRegistration({
   }
   if (!actionsWithin({ capability: pull, allowed: PULL_ACTIONS })) {
     return refuse(
-      'The capability "allowedAction" must be present and within ["GET", "HEAD"].',
+      'The capability "allowedAction" must be present and within ["GET"].',
       '#/capability/allowedAction'
     )
   }
@@ -230,6 +231,18 @@ export function parseReplicaRegistration({
 }
 
 /**
+ * Whether a served Collection Metadata object is under log governance: its
+ * `encryption` carries the derived `history` member.
+ * @param served {Record<string, unknown>}   a peer's `GET .../meta` body
+ * @returns {boolean}
+ */
+function isGovernedCollection(served: Record<string, unknown>): boolean {
+  return (
+    isPlainObject(served.encryption) && isPlainObject(served.encryption.history)
+  )
+}
+
+/**
  * The members of a served Collection Metadata object a replica stores: the
  * object without the members a server derives at response time. On a
  * Collection under log governance the served `encryption` and `revisions` are
@@ -242,9 +255,7 @@ export function storedProjectionOfCollection(
   served: Record<string, unknown>
 ): CollectionMetadata {
   const { url: _url, linkset: _linkset, ...rest } = served
-  const governed =
-    isPlainObject(rest.encryption) && isPlainObject(rest.encryption.history)
-  if (governed) {
+  if (isGovernedCollection(served)) {
     const { encryption: _encryption, revisions: _revisions, ...stored } = rest
     return stored as unknown as CollectionMetadata
   }
@@ -786,9 +797,18 @@ async function assertBootstrapDelegation({
 }
 
 /**
- * Each Collection the registration pulls that both sides already hold must
- * agree on the immutable members. With no `collections` list, every local
- * Collection is checked.
+ * Each Collection the registration pulls that both sides already hold as the
+ * same life must agree on the immutable members. With no `collections` list,
+ * every local Collection is checked.
+ *
+ * Two lives of one id (different generations) are not compared. The apply
+ * path never merges them: it replaces the held life or skips the received
+ * one.
+ *
+ * A Collection under log governance stores no `encryption`, and its served
+ * `revisions` is derived from the log. Where both sides are governed the logs
+ * decide, on the apply path. Where one side is governed and the other stores
+ * a client-written `encryption`, the two cannot be merged.
  * @param options {object}
  * @param options.peer {PeerClient}
  * @param options.record {ReplicaRegistration}
@@ -826,13 +846,14 @@ async function assertImmutableMembersMatch({
       collectionId
     ): Promise<{ fork?: string } | { error: unknown }> => {
       try {
-        const local = await storage.getCollectionMetadata({
+        const stored = await storage.getCollectionMetadataAndLogValidator({
           spaceId,
           collectionId
         })
-        if (local === undefined) {
+        if (!stored) {
           return {}
         }
+        const { collectionMetadata: local } = stored
         const served = await peer.readJson({
           url: peerUrlOf({
             path: collectionMetaPath({ spaceId: peerSpaceId, collectionId }),
@@ -843,14 +864,36 @@ async function assertImmutableMembersMatch({
         if (served.status === 404) {
           return {}
         }
+        if (generationOfEtag(served.etag) !== local.metaGeneration) {
+          return {}
+        }
         const incoming = storedProjectionOfCollection(served.json)
+        const peerGoverned = isGovernedCollection(served.json)
+        const localGoverned = stored.logValidator !== undefined
+        if (peerGoverned) {
+          return localGoverned || local.encryption === undefined
+            ? {}
+            : {
+                fork:
+                  '"encryption" is derived from a governing history log on ' +
+                  'the peer and declared directly here.'
+              }
+        }
+        if (localGoverned && incoming.encryption !== undefined) {
+          return {
+            fork:
+              '"encryption" is declared directly on the peer and derived ' +
+              'from a governing history log here.'
+          }
+        }
         const forward = mergeAppliedCollectionMetadata({
           held: local,
           incoming
         })
         const backward = mergeAppliedCollectionMetadata({
           held: incoming,
-          incoming: local
+          incoming: local,
+          sides: { held: 'on the peer', incoming: 'here' }
         })
         const fork = [forward, backward].find(result => 'fork' in result)
         return fork !== undefined && 'fork' in fork ? { fork: fork.fork } : {}

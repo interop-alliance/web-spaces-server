@@ -62,18 +62,17 @@ export function isReplicaId(id: string): boolean {
 }
 
 /**
- * Reserved path segments from the spec's Reserved Path Segment Registry (plus
- * the server's own non-spec `import` endpoint). A client-chosen Collection or
- * Resource id matching one of these would shadow the reserved route at that
- * position (e.g. a Collection named `export` would shadow
- * `/space/{id}/export`), so the spec requires rejecting it with 409
+ * Reserved path segments from the spec's Reserved Path Segment Registry. A
+ * client-chosen Collection or Resource id matching one of these would shadow
+ * the reserved route at that position (e.g. a Collection named `export` would
+ * shadow `/space/{id}/export`), so the spec requires rejecting it with 409
  * `reserved-id`. Space ids have no reserved siblings (`/space/{id}` has no
  * static neighbors), so no set exists for the `space` kind.
  *
  * Exported as the server's authoritative per-kind sets so a client can mirror
  * them rather than hand-maintaining a copy (client #13). NOTE the one known
- * divergence from the pure spec registry: `import` is this server's non-spec
- * tar-import endpoint, so a client mirroring the *spec* registry should omit
+ * divergence from the pure spec registry: `.revocations` is not a route and
+ * not in the registry, so a client mirroring the *spec* registry should omit
  * it. Kept byte-identical to `@interop/storage-core`'s exported registry
  * (locked by a drift-guard test); the local definition keeps the id-safety
  * logic self-contained.
@@ -84,7 +83,7 @@ export const RESERVED_COLLECTION_IDS = new Set([
   // reserved and the path answers with a 308 to the Space URL.
   'collections',
   'export',
-  'import', // non-spec: this server's tar-import endpoint
+  'import',
   'linkset',
   // The Space Metadata object is addressed at `/space/{id}/meta`, which
   // occupies the `{collectionId}` position.

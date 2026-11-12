@@ -8,7 +8,7 @@
  * deny a valid capability holder.
  */
 import type { FastifyRequest } from 'fastify'
-import { verifyRequestZcap } from './zcap.js'
+import { capabilityActionOf, verifyRequestZcap } from './zcap.js'
 import { hasAuthHeaders, isSafeMethod } from './auth-header-hooks.js'
 import {
   resolveEffectivePolicy,
@@ -81,7 +81,7 @@ export async function authorize({
         request,
         peerWebvh: true,
         allowedTarget,
-        allowedAction: method,
+        allowedAction: capabilityActionOf({ method }),
         spaceController,
         requestName,
         allowTargetQuery,

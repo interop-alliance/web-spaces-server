@@ -42,15 +42,16 @@ import type { CollectionMetadata } from '../types.js'
  * The descriptor checks a Collection Metadata write runs against the
  * Collection's current state: a direct `encryption` write on a log-governed
  * Collection is refused (`encryption-history-log-governed`, 409), the
- * encryption descriptor is set-once (`encryption-immutable`, 409), the
- * `revisions` descriptor's `resolution` and `immutable` are set at creation
- * and immutable afterward (`revisions-immutable`, 409), and the effective
- * object may not carry both `plaintext` and `encryption` (400). On a
- * log-governed Collection a `revisions` the body carries is checked against
- * the derived descriptor, and an omitted one is not a change, since the log
- * holds it. Update Collection runs it inside the backend's write, against
- * the prior the backend reads under its lock. A create (no `existing`)
- * declares freely.
+ * `encryption` descriptor is declared at creation and immutable afterward
+ * (`encryption-immutable`, 409), the `revisions` descriptor's `resolution` and
+ * `immutable` are set at creation and immutable afterward
+ * (`revisions-immutable`, 409), and the effective object may not carry both
+ * `plaintext` and `encryption` (400). On a log-governed Collection a
+ * `revisions` the body carries is checked against the derived descriptor, and
+ * an omitted one is not a change, since the log holds it. Update Collection
+ * runs it inside the backend's write, against the prior the backend reads
+ * under its lock. A create (no `existing`, which includes a create over a
+ * Collection tombstone) declares freely.
  * @param options {object}
  * @param options.parsed {ParsedCollectionMetadataBody}   the shape-checked body
  * @param [options.existing] {CollectionMetadata}   the stored object, on an
@@ -74,7 +75,7 @@ function assertCollectionMetadataTransition({
     throw new EncryptionHistoryLogGovernedError()
   }
   assertEncryptionDescriptorTransition({
-    existing: existing?.encryption,
+    stored: existing,
     incoming: parsed.encryption
   })
   if (governed !== undefined) {
@@ -142,8 +143,10 @@ function selectsSameBackend({
  *   Id) Collection").
  * - `encryption`: a direct write on a log-governed Collection is refused
  *   (`encryption-history-log-governed`, 409). Otherwise the descriptor is
- *   set-once: an omitted member on an encrypted Collection is an attempt to
- *   clear it, `encryption-immutable` (409), as is any narrowing change.
+ *   declared by the create and immutable afterward: an update that adds one
+ *   to a Collection without one is refused (`encryption-immutable`, 409). An
+ *   omitted member on an encrypted Collection is an attempt to clear it,
+ *   refused the same way, as is any narrowing change.
  * - `revisions`: `resolution` and `immutable` are declared by the create and
  *   immutable afterward, so an update that adds, drops, or changes one is
  *   refused (`revisions-immutable`, 409); `merge` follows the body. On a

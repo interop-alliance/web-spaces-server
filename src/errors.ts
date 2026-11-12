@@ -368,13 +368,15 @@ export class ReplicaRefusedError extends ProblemError {
 }
 
 /**
- * 409 — a Collection update tried to change or clear an existing client-side
- * `encryption` descriptor, or move its scheme `version` backwards. The
- * descriptor is set-once, version-monotonic (spec): declaring it on a
- * Collection that lacks one is allowed, but changing its scheme, decreasing or
- * removing its `version`, or clearing it on a populated Collection would
- * corrupt the stored, client-encrypted Resources. Like the other
- * state-conflict 409s (`id-conflict`, `unsupported-backend`), it is only
+ * 409 -- a Collection update tried to add a client-side `encryption`
+ * descriptor to an existing Collection that lacks one, to change or clear an
+ * existing descriptor, or to move its scheme `version` backwards. The
+ * descriptor is creation-only and version-monotonic (spec "Creation-only
+ * members"). It is declared by the write that creates the Collection, since
+ * under replication a late declaration cannot be merged. Changing its scheme,
+ * decreasing or removing its `version`, or clearing it on a populated
+ * Collection would corrupt the stored, client-encrypted Resources. Like the
+ * other state-conflict 409s (`id-conflict`, `unsupported-backend`), it is only
  * observable by a caller already authorized to update the Collection -- it is
  * checked after capability verification.
  * @param options {object}
@@ -385,7 +387,7 @@ export class EncryptionImmutableError extends ProblemError {
   constructor({ detail, pointer }: { detail?: string; pointer?: string } = {}) {
     const resolvedDetail =
       detail ??
-      "A Collection's 'encryption' descriptor is set-once and cannot be changed or cleared."
+      "A Collection's 'encryption' descriptor is declared at creation and cannot be added, changed, or cleared."
     super({
       type: ProblemTypes.ENCRYPTION_IMMUTABLE,
       title: 'Collection encryption descriptor is immutable.',

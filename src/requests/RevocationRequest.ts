@@ -22,6 +22,7 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import {
+  capabilityActionOf,
   handleRevocationInvocationVerify,
   ROOT_PREFIX,
   verifyRevocationChain
@@ -348,7 +349,7 @@ export class RevocationRequest {
       // container URL, the same root every space-family route accepts.
       rootTarget: absoluteSpaceUrl({ spaceId, serverUrl }),
       rootController: spaceMetadata.controller,
-      expectedAction: request.method,
+      expectedAction: capabilityActionOf({ method: request.method }),
       requestName
     })
 

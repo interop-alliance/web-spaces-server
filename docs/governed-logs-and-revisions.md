@@ -39,6 +39,14 @@ whose Metadata object already carries a client-written `encryption` member, or a
 exclude each other on every later Metadata write, and `plaintext` has no removal
 path.
 
+The guarded create is one of the writes that may declare `encryption`, which is
+creation-only (spec "Creation-only members"). The others create the Collection:
+Create Collection, and a create by `PUT .../meta`, a create over a Collection
+tombstone included. An Update Collection that adds `encryption` to an existing
+Collection without one is refused with `encryption-immutable` (409). Under
+replication, a late first declaration on one server and a full replacement
+without it on another could not be merged.
+
 ## Derived descriptors
 
 From then on, the Collection's served `encryption` member is derived from the

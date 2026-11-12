@@ -271,9 +271,10 @@ describe('Collection equality query profile', () => {
       })
       assert.deepStrictEqual(desc.data.plaintext, { indexes: ['author'] })
 
-      // `{}` is the empty state: the member stays present (so it keeps
-      // excluding `encryption`) with no declaration, and a later query naming
-      // the old attribute now 400s.
+      // `{}` is the empty state: the member stays present with no
+      // declaration, and a later query naming the old attribute now 400s.
+      // An update still cannot add `encryption`: the descriptor is
+      // creation-only (409 `encryption-immutable`).
       await alice.pws.request({
         url: `${baseServerUrl}space/${spaceId()}/decl-clear/meta`,
         method: 'PUT',
@@ -293,8 +294,9 @@ describe('Collection equality query profile', () => {
           json: { id: 'decl-clear', encryption: { scheme: 'edv' } }
         })
       )
-      assert.equal(enc.response.status, 400)
-      assert.equal(enc.data.errors?.[0]?.pointer, '#/plaintext')
+      assert.equal(enc.response.status, 409)
+      assert.match(enc.data.type, /#encryption-immutable/)
+      assert.equal(enc.data.errors?.[0]?.pointer, '#/encryption')
     })
 
     it('rejects a non-object plaintext (400, pointer #/plaintext)', async () => {
@@ -386,8 +388,8 @@ describe('Collection equality query profile', () => {
         method: 'PUT',
         json: { id: 'mx-enc-first', encryption: descriptor }
       })
-      // `encryption` is set-once and cleared by omission (`PUT .../meta` is a
-      // full replacement), so every update must resend it -- this test
+      // `encryption` is creation-only and cleared by omission (`PUT .../meta`
+      // is a full replacement), so every update must resend it -- this test
       // exercises the mutual-exclusion check, not that immutability rail, so
       // both requests carry the descriptor forward alongside `plaintext`.
       const err = await rejection(
@@ -414,7 +416,9 @@ describe('Collection equality query profile', () => {
       assert.equal(empty.data.errors?.[0]?.pointer, '#/plaintext')
     })
 
-    it('rejects adding an encryption descriptor to an already-indexed Collection (400)', async () => {
+    it('rejects adding an encryption descriptor to an already-indexed Collection (409, creation-only)', async () => {
+      // The creation-only rule refuses the update before the exclusion
+      // check is reached.
       await createIndexedCollection('mx-idx-first', ['parentId'])
       const err = await rejection(
         alice.pws.request({
@@ -423,7 +427,8 @@ describe('Collection equality query profile', () => {
           json: { id: 'mx-idx-first', encryption: { scheme: 'edv' } }
         })
       )
-      assert.equal(err.response.status, 400)
+      assert.equal(err.response.status, 409)
+      assert.match(err.data.type, /#encryption-immutable/)
     })
   })
 

@@ -281,9 +281,10 @@ function lineCount(body: string): number {
  * same gate a Collection Metadata write passes) and the shape of its
  * `revisions` slot, the fast-forward rule against the stored log, and both
  * descriptors' transitions from the prior head (`epochs` append-only,
- * `currentEpoch` never older, `hmac` id and type permanent, `scheme` and
- * `version` set-once; `revisions.resolution` and `revisions.immutable`
- * set-once), raising exactly what a Collection Metadata write raises.
+ * `currentEpoch` never older, `hmac` id and type permanent, `scheme`
+ * unchanged and `version` never lower; `revisions.resolution` and
+ * `revisions.immutable` unchanged), raising exactly what a Collection Metadata
+ * write raises.
  *
  * The fast-forward rule is what keeps the log append-only at the server: an
  * append carries the stored bytes verbatim followed by exactly one new line.
@@ -295,7 +296,10 @@ function lineCount(body: string): number {
  * can add to the history but cannot erase it; a break inside an appended
  * entry (a bad proof, a broken hash chain) is still the verifying reader's
  * to detect under the governing profile. A create (no stored log) is bound
- * by the line contract alone.
+ * by the line contract alone. An append compares against the prior head's
+ * `state`, which is always an object, so the comparison always has a stored
+ * descriptor and the creation-only refusal for an absent one does not apply
+ * here.
  *
  * @param options {object}
  * @param options.body {string}   the new log body
@@ -345,7 +349,7 @@ export function assertGoverningLogAppend({
     parseGoverningLog({ body: prior, requestName }).head
   )
   assertEncryptionDescriptorTransition({
-    existing: existing.encryptionState as CollectionEncryption,
+    stored: { encryption: existing.encryptionState as CollectionEncryption },
     incoming
   })
   assertRevisionsTransition({

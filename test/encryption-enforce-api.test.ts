@@ -315,7 +315,7 @@ describe('Encryption enforcement API', () => {
   it('PUT the Collection /meta of an edv Collection rejects a plaintext custom (422)', async () => {
     // Collection Metadata takes the same branch as Resource Metadata: on an
     // encrypted Collection its `custom` IS the opaque envelope. `PUT .../meta`
-    // is a full replacement and `encryption` is set-once, so the descriptor
+    // is a full replacement and `encryption` is creation-only, so the descriptor
     // must be resent alongside `custom` or the write never reaches the
     // envelope check (it 409s as an attempted clear instead).
     const err = await rejection(

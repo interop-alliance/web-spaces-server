@@ -46,7 +46,8 @@ for the target-and-verb predicate this family of shapes rests on.
   under it, except the Space Metadata URL `/space/<S>/meta` and anything under
   it.
 - Its `allowedAction` is present, non-empty, and drawn from the closed PWS verb
-  vocabulary {GET, HEAD, POST, PUT, DELETE}.
+  vocabulary {GET, POST, PUT, DELETE}. A `HEAD` request is authorized as a
+  `GET`, so `HEAD` is not an action of its own.
 
 The whole vocabulary is admitted rather than a chosen subset, because the
 generation delegation a wallet already mints carries exactly it, and a child
@@ -144,7 +145,7 @@ hold together.
 - Its `invocationTarget` is the canonical trailing-slash URL of the account
   Space (the Space carrying the delegator's log) or of the auxiliary Space
   carrying the annex log.
-- Its `allowedAction` is present, non-empty, and within {GET, HEAD}.
+- Its `allowedAction` is present, non-empty, and within {GET}.
 - Its parent is the Space's synthesized root.
 
 The server resolves and verifies the annex document out of its own storage, as
@@ -179,9 +180,9 @@ hold together.
 - Its `invocationTarget` is the Space's replicas URL `/space/<S>/replicas`
   exactly. A registration URL beneath it does not qualify as the target. The
   grant reaches those by attenuation.
-- Its `allowedAction` is present, non-empty, and within {GET, HEAD, POST, PUT,
-  DELETE}, the verbs the replicas routes serve. Every `GET` route answers
-  `HEAD`.
+- Its `allowedAction` is present, non-empty, and within {GET, POST, PUT,
+  DELETE}, the actions the replicas routes serve. Every `GET` route answers
+  `HEAD`, which is authorized as a `GET`.
 - Its parent is the Space's synthesized root.
 - The delegator's log is a registration's copy, not a log self-hosted on this
   server.

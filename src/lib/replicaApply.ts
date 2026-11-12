@@ -30,6 +30,7 @@ import {
   readingOfStamp
 } from './hlc.js'
 import { isValidOriginId } from './originId.js'
+import { IMMUTABLE_MEMBER_DEFAULTS } from './revisions.js'
 import { WEBVH_LOG_RESOURCE_ID } from './validateDid.js'
 
 /**
@@ -330,35 +331,54 @@ export function decideCollectionTombstoneApply({
  * for the members that are immutable once set: `encryption`,
  * `revisions.resolution`, `revisions.immutable` and `backend`, which keeps
  * the held selection as Update Collection's `backend-immutable` rule does.
- * One the received object omits and the held one sets is kept. Two different set values cannot be
- * ordered, so the result is a fork naming the member. `encryption.version`
- * takes the greater of the two.
+ * One the received object omits and the held one sets is kept. Two different
+ * set values cannot be ordered, so the result is a fork naming the member.
+ * `encryption` is declared only by the write that creates a Collection, so a
+ * received descriptor the held object lacks is a fork too.
+ * `encryption.version` takes the greater of the two. An absent
+ * `revisions.resolution` or `revisions.immutable` stands for its default, so
+ * a received value other than the default over a held object that lacks the
+ * member is a fork, and a restated default is taken.
+ *
+ * A fork's text says where each object is. The apply path merges the peer's
+ * object over the local one, which is the default. The registration check
+ * also merges the other way round and passes `sides` to say so.
  *
  * @param options {object}
  * @param options.held {CollectionMetadata}
  * @param options.incoming {CollectionMetadata}
+ * @param [options.sides] {{ held: string, incoming: string }}   where each
+ *   object is, as a fork's text names it
  * @returns {{ metadata: CollectionMetadata } | { fork: string }}
  */
 export function mergeAppliedCollectionMetadata({
   held,
-  incoming
+  incoming,
+  sides = { held: 'here', incoming: 'on the peer' }
 }: {
   held: CollectionMetadata
   incoming: CollectionMetadata
+  sides?: { held: string; incoming: string }
 }): { metadata: CollectionMetadata } | { fork: string } {
   const merged: CollectionMetadata = { ...incoming }
   if (held.backend !== undefined) {
     merged.backend = held.backend
   }
 
-  if (held.encryption !== undefined) {
+  if (held.encryption === undefined) {
+    if (incoming.encryption !== undefined) {
+      return {
+        fork: `"encryption" is declared ${sides.incoming} and absent ${sides.held}.`
+      }
+    }
+  } else {
     if (incoming.encryption === undefined) {
       merged.encryption = held.encryption
     } else if (incoming.encryption.scheme !== held.encryption.scheme) {
       return {
         fork:
-          `"encryption.scheme" is "${incoming.encryption.scheme}" on the ` +
-          `peer and "${held.encryption.scheme}" here.`
+          `"encryption.scheme" is "${incoming.encryption.scheme}" ` +
+          `${sides.incoming} and "${held.encryption.scheme}" ${sides.held}.`
       }
     } else {
       const heldVersion = (held.encryption as { version?: unknown }).version
@@ -381,6 +401,16 @@ export function mergeAppliedCollectionMetadata({
     const heldValue = held.revisions?.[member]
     const incomingValue = incoming.revisions?.[member]
     if (heldValue === undefined) {
+      if (
+        incomingValue !== undefined &&
+        incomingValue !== IMMUTABLE_MEMBER_DEFAULTS[member]
+      ) {
+        return {
+          fork:
+            `"revisions.${member}" is ${JSON.stringify(incomingValue)} ` +
+            `${sides.incoming} and absent ${sides.held}.`
+        }
+      }
       continue
     }
     if (incomingValue === undefined) {
@@ -388,8 +418,8 @@ export function mergeAppliedCollectionMetadata({
     } else if (incomingValue !== heldValue) {
       return {
         fork:
-          `"revisions.${member}" is ${JSON.stringify(incomingValue)} on the ` +
-          `peer and ${JSON.stringify(heldValue)} here.`
+          `"revisions.${member}" is ${JSON.stringify(incomingValue)} ` +
+          `${sides.incoming} and ${JSON.stringify(heldValue)} ${sides.held}.`
       }
     }
   }

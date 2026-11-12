@@ -18,7 +18,14 @@ import { ProblemTypes } from '@interop/storage-core'
 
 import type { IDID } from '../src/types.js'
 
-import { delegate, createPeerSpace, pullOnce, zcapClients } from './helpers.js'
+import {
+  delegate,
+  createPeerSpace,
+  genesisLine,
+  oneEpoch,
+  pullOnce,
+  zcapClients
+} from './helpers.js'
 import {
   type PeerServer,
   bootPeerServer,
@@ -739,7 +746,7 @@ describe('Replication between two servers', () => {
         capability: `urn:zcap:root:${encodeURIComponent(fromSpace)}`,
         invocationTarget: fromSpace,
         controller: replica.did,
-        allowedActions: ['GET', 'HEAD']
+        allowedActions: ['GET']
       })
       assert.notEqual(capability.id, before.capability.id)
       const replaced = await put({ ...before, capability })
@@ -799,7 +806,7 @@ describe('Replication between two servers', () => {
           capability: `urn:zcap:root:${encodeURIComponent(fromSpace)}`,
           invocationTarget: fromSpace,
           controller: replica.did,
-          allowedActions: ['GET', 'HEAD']
+          allowedActions: ['GET']
         })
         const replaced = await put({ ...before, capability })
         assert.equal(replaced.statusCode, 204, replaced.payload)
@@ -915,7 +922,7 @@ describe('Replication between two servers', () => {
         capability: `urn:zcap:root:${encodeURIComponent(fromSpace)}`,
         invocationTarget: fromSpace,
         controller: replica.did,
-        allowedActions: ['GET', 'HEAD']
+        allowedActions: ['GET']
       })
       const peerReads = vi.spyOn(source.fastify, 'inject')
       try {
@@ -1715,6 +1722,76 @@ describe('Replication between two servers', () => {
         status.collections.map(({ id, state }: any) => ({ id, state })),
         [{ id: 'bulk', state: 'synced' }]
       )
+    })
+  })
+
+  describe("a registration's check of the immutable members", () => {
+    it('does not compare two lives of one Collection id', async () => {
+      await createSpace({ server: source, spaceId: 'lives-src' })
+      await createSpace({ server: replica, spaceId: 'lives-dst' })
+      // Each server creates its own `notes`, so the two generations differ.
+      // The apply path replaces one life or skips the other, and merges
+      // neither.
+      await call({
+        server: source,
+        path: '/space/lives-src/',
+        method: 'POST',
+        json: { id: 'notes', revisions: { immutable: true } }
+      })
+      await call({
+        server: replica,
+        path: '/space/lives-dst/',
+        method: 'POST',
+        json: { id: 'notes' }
+      })
+      const created = await register({
+        to: replica,
+        toSpaceId: 'lives-dst',
+        from: source,
+        fromSpaceId: 'lives-src'
+      })
+      assert.equal(created.statusCode, 201, created.payload)
+    })
+
+    it('admits one life both servers hold under log governance', async () => {
+      await createSpace({ server: source, spaceId: 'gov-src' })
+      await createSpace({ server: replica, spaceId: 'gov-dst' })
+      // The stored object keeps the `revisions` the create declared. The
+      // served one derives its descriptors from the log, which restates it.
+      await call({
+        server: source,
+        path: '/space/gov-src/',
+        method: 'POST',
+        json: { id: 'vault', revisions: { immutable: true } }
+      })
+      const governed = await call({
+        server: source,
+        path: '/space/gov-src/vault/meta/log',
+        method: 'PUT',
+        body: new TextEncoder().encode(
+          genesisLine({ ...oneEpoch, revisions: { immutable: true } }) + '\n'
+        ),
+        contentType: 'text/jsonl',
+        headers: { 'if-none-match': '*' }
+      })
+      assert.equal(governed.statusCode, 204, governed.payload)
+      const forward = await register({
+        to: replica,
+        toSpaceId: 'gov-dst',
+        from: source,
+        fromSpaceId: 'gov-src'
+      })
+      assert.equal(forward.statusCode, 201, forward.payload)
+      await pull({ server: replica, spaceId: 'gov-dst' })
+
+      // The counterpart reads the replica's copy of the same life.
+      const counterpart = await register({
+        to: source,
+        toSpaceId: 'gov-src',
+        from: replica,
+        fromSpaceId: 'gov-dst'
+      })
+      assert.equal(counterpart.statusCode, 201, counterpart.payload)
     })
   })
 })

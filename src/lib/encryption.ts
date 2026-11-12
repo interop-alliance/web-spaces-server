@@ -4,12 +4,13 @@
  * declaring that its Resources are client-encrypted and naming the scheme; any
  * authorized reader discovers it by reading the Collection Metadata object and
  * then decrypts with its own keys. The server never decrypts: it validates only the
- * descriptor's *shape* and enforces *set-once* immutability, storing the value
- * opaquely. This mirrors the backend-selection helpers in lib/backends.ts
- * (validate on write / preserve on read), kept separate because encryption is a
- * per-Collection client concern, not a backend capability.
+ * descriptor's *shape* and enforces that it is declared at creation and immutable
+ * afterward, storing the value opaquely. This mirrors the backend-selection
+ * helpers in lib/backends.ts (validate on write / preserve on read), kept
+ * separate because encryption is a per-Collection client concern, not a backend
+ * capability.
  */
-import type { CollectionEncryption } from '../types.js'
+import type { CollectionEncryption, CollectionMetadata } from '../types.js'
 import {
   InvalidRequestBodyError,
   EncryptionImmutableError,
@@ -439,7 +440,7 @@ function assertNonEmptyArray({
  * server-side violation; the provisioning-time rule is a client-profile matter.
  *
  * @param options {object}
- * @param [options.existing] {CollectionEncryption}   the persisted descriptor
+ * @param options.existing {CollectionEncryption}   the persisted descriptor
  * @param options.incoming {CollectionEncryption}   the validated request descriptor
  * @returns {void}
  */
@@ -447,12 +448,12 @@ export function assertEncryptionHmacTransition({
   existing,
   incoming
 }: {
-  existing?: CollectionEncryption
+  existing: CollectionEncryption
   incoming: CollectionEncryption
 }): void {
-  const existingHmac = existing?.hmac
+  const existingHmac = existing.hmac
   if (existingHmac === undefined) {
-    // No prior blinding key: a first declaration has nothing to preserve.
+    // No prior blinding key: a late introduction has nothing to preserve.
     return
   }
   const incomingHmac = incoming.hmac
@@ -497,7 +498,7 @@ export function assertEncryptionHmacTransition({
  * likewise unrestricted (there is nothing to append to yet).
  *
  * @param options {object}
- * @param [options.existing] {CollectionEncryption}   the persisted descriptor
+ * @param options.existing {CollectionEncryption}   the persisted descriptor
  * @param options.incoming {CollectionEncryption}   the validated request descriptor
  * @returns {void}
  */
@@ -505,10 +506,10 @@ export function assertEncryptionEpochsTransition({
   existing,
   incoming
 }: {
-  existing?: CollectionEncryption
+  existing: CollectionEncryption
   incoming: CollectionEncryption
 }): void {
-  const existingEpochs = existing?.epochs
+  const existingEpochs = existing.epochs
   if (existingEpochs === undefined || existingEpochs.length === 0) {
     // No prior epochs: a first epoch declaration has nothing to append to.
     return
@@ -528,7 +529,7 @@ export function assertEncryptionEpochsTransition({
   const existingIds = new Set(existingEpochs.map(epoch => epoch.id))
   const { currentEpoch } = incoming
   if (
-    currentEpoch !== existing?.currentEpoch &&
+    currentEpoch !== existing.currentEpoch &&
     existingIds.has(currentEpoch as string)
   ) {
     throw new InvalidRequestBodyError({
@@ -539,41 +540,54 @@ export function assertEncryptionEpochsTransition({
 }
 
 /**
- * Enforces the full `encryption`-descriptor transition rails against a persisted
- * descriptor in one call: set-once immutability
- * ({@link assertEncryptionTransition}) plus the key-epoch rails
- * ({@link assertEncryptionEpochsTransition}), the blinding-key permanence rail
- * ({@link assertEncryptionHmacTransition}) and the scheme-version rail
- * ({@link assertEncryptionVersionTransition}). Unlike those -- which require
- * a supplied `incoming` -- this also accepts an absent one: a write whose
- * description would CLEAR an existing descriptor is rejected with
- * `encryption-immutable` (409), on the same terms as changing it. The request
- * layer uses this twice per Update Collection: once against its own
- * (pre-lock) read for a clean early rejection, and again as the
- * `writeCollection` `assertTransition` callback, re-evaluated inside the
- * backend's lock/transaction against the freshly re-read description -- so a
- * concurrent descriptor write cannot be silently clobbered and the epoch
- * append-only rail holds unconditionally, not just under `If-Match`.
+ * Enforces every `encryption`-descriptor transition check between a stored
+ * Collection and a write that updates it, in one call: the creation-only rule
+ * and the unchanging `scheme` ({@link assertEncryptionTransition}), the key-epoch
+ * checks ({@link assertEncryptionEpochsTransition}), the permanent blinding
+ * key ({@link assertEncryptionHmacTransition}) and the scheme-version check
+ * ({@link assertEncryptionVersionTransition}). Unlike those, which require a
+ * supplied `incoming`, this also accepts an absent one. A write that would
+ * clear a stored descriptor is refused with `encryption-immutable` (409), on
+ * the same terms as changing it. A Collection with no descriptor that stays
+ * without one passes.
+ *
+ * The descriptor is creation-only (spec "Creation-only members"). The write
+ * that creates the Collection declares it, so an absent `stored` (a create)
+ * passes whatever it declares. A `stored` Collection with no `encryption`
+ * member has none, and adding one is refused. Update Collection runs this
+ * inside the backend's write, against the stored object the backend reads
+ * under its lock, so a concurrent descriptor write cannot be clobbered and the
+ * epoch append-only check holds unconditionally, not just under `If-Match`.
+ * An append to a governing history log runs it against the prior head.
  *
  * @param options {object}
- * @param [options.existing] {CollectionEncryption}   the persisted descriptor
+ * @param options.stored {Pick<CollectionMetadata, 'encryption'> | undefined}
+ *   the stored Collection, or `undefined` when the write creates it
  * @param [options.incoming] {CollectionEncryption}   the descriptor about to be
- *   persisted (absent when the write would drop the descriptor entirely)
+ *   stored (absent when the write would drop the descriptor entirely)
  * @returns {void}
  */
 export function assertEncryptionDescriptorTransition({
-  existing,
+  stored,
   incoming
 }: {
-  existing?: CollectionEncryption
+  stored: Pick<CollectionMetadata, 'encryption'> | undefined
   incoming?: CollectionEncryption
 }): void {
-  if (existing === undefined) {
-    // Nothing persisted yet: a first declaration (or a plaintext Collection
-    // staying plaintext) has no rails to check.
+  if (stored === undefined) {
+    // A create declares freely.
     return
   }
+  const existing = stored.encryption
   if (incoming === undefined) {
+    if (existing === undefined) {
+      // A Collection without a descriptor stays without one.
+      return
+    }
+    throw new EncryptionImmutableError()
+  }
+  if (existing === undefined) {
+    // Creation-only: an existing Collection without a descriptor takes none.
     throw new EncryptionImmutableError()
   }
   assertEncryptionTransition({ existing, incoming })
@@ -589,16 +603,16 @@ export function assertEncryptionDescriptorTransition({
  * Once set, the descriptor's `version` follows the same never-backwards philosophy
  * as `currentEpoch`: an update may not REMOVE it and may not DECREASE it
  * (increasing is allowed, a future scheme migration). Either violation is
- * `encryption-immutable` (409, pointer `#/encryption/version`) -- the spec folds
- * version regressions into the same set-once conflict as a scheme change, since
- * both would corrupt the stored, client-encrypted Resources. A descriptor that
- * had no prior `version` is unrestricted (a first declaration -- including
- * ADDING a version to a versionless descriptor -- has nothing to move backwards
- * from). Both values are read from the still-`unknown`-shaped descriptor: `version`
- * is preserved opaquely, not part of the typed `CollectionEncryption` shape.
+ * `encryption-immutable` (409, pointer `#/encryption/version`). The spec gives a
+ * version regression the same conflict as a scheme change, since both would
+ * corrupt the stored, client-encrypted Resources. A descriptor that
+ * had no prior `version` is unrestricted: adding a version to a versionless
+ * descriptor has nothing to move backwards from. Both values are read from the
+ * still-`unknown`-shaped descriptor: `version` is preserved opaquely, not part
+ * of the typed `CollectionEncryption` shape.
  *
  * @param options {object}
- * @param [options.existing] {CollectionEncryption}   the persisted descriptor
+ * @param options.existing {CollectionEncryption}   the persisted descriptor
  * @param options.incoming {CollectionEncryption}   the validated request descriptor
  * @returns {void}
  */
@@ -606,13 +620,12 @@ function assertEncryptionVersionTransition({
   existing,
   incoming
 }: {
-  existing?: CollectionEncryption
+  existing: CollectionEncryption
   incoming: CollectionEncryption
 }): void {
-  const existingVersion = (existing as { version?: unknown } | undefined)
-    ?.version
+  const existingVersion = (existing as { version?: unknown }).version
   if (typeof existingVersion !== 'number') {
-    // No prior version: a first declaration has nothing to move backwards from.
+    // No prior version: nothing to move backwards from.
     return
   }
   const incomingVersion = (incoming as { version?: unknown }).version
@@ -632,21 +645,18 @@ function assertEncryptionVersionTransition({
 }
 
 /**
- * Enforces set-once immutability of a Collection's `encryption` descriptor on
- * update. Call only when an `incoming` descriptor was supplied (and shape-validated)
- * by the request. Declaring a descriptor on a Collection that lacks one is allowed
- * (`absent -> present`: late declaration / migration of a pre-descriptor
- * Collection); re-sending the same `scheme` is a no-op. Changing the `scheme` of
- * an existing descriptor is rejected with `encryption-immutable` (409) -- it would
- * corrupt the stored, client-encrypted Resources. (Clearing is not expressible:
- * an absent body `encryption` leaves the existing descriptor untouched, and an
- * explicit non-object is already a 400 in `assertSupportedEncryption`.) The
- * `scheme` is the immutable identity; comparison deliberately ignores any
- * future public-reference fields, whose evolution (e.g. adding a recipient) is a
- * separate, allowed operation.
+ * Enforces the unchanging `scheme` of a Collection's stored `encryption`
+ * descriptor on an update. Call only when an `incoming` descriptor was
+ * supplied (and shape-validated). Re-sending the same `scheme` is a no-op.
+ * Changing it is refused with `encryption-immutable` (409), since it would
+ * corrupt the stored, client-encrypted Resources. The creation-only rule and
+ * clearing are the caller's checks
+ * ({@link assertEncryptionDescriptorTransition}). The `scheme` is the immutable
+ * identity. The comparison ignores the other members, whose evolution (e.g.
+ * adding a recipient) is a separate, allowed operation.
  *
  * @param options {object}
- * @param [options.existing] {CollectionEncryption}   the persisted descriptor
+ * @param options.existing {CollectionEncryption}   the stored descriptor
  * @param options.incoming {CollectionEncryption}   the validated request descriptor
  * @returns {void}
  */
@@ -654,10 +664,10 @@ export function assertEncryptionTransition({
   existing,
   incoming
 }: {
-  existing?: CollectionEncryption
+  existing: CollectionEncryption
   incoming: CollectionEncryption
 }): void {
-  if (existing !== undefined && existing.scheme !== incoming.scheme) {
+  if (existing.scheme !== incoming.scheme) {
     throw new EncryptionImmutableError()
   }
 }

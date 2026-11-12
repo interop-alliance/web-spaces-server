@@ -93,7 +93,7 @@
  *    reads the document. Its `invocationTarget` is the canonical
  *    trailing-slash URL of the account Space (the Space carrying the
  *    delegator's log) or of the auxiliary Space carrying the annex log. Its
- *    `allowedAction` is present, non-empty, and within {GET, HEAD}. Its
+ *    `allowedAction` is present, non-empty, and exactly {GET}. Its
  *    parent is the Space's synthesized root. This is the pull grant a wallet
  *    session signs to a replica server. The pointer is the record: a
  *    credential's annex rung writes it into the annex log before any
@@ -105,7 +105,7 @@
  *    pointer check; the predicates are alternatives.
  * 7. Replicas-route maintenance. The delegation's `invocationTarget` is a
  *    Space's replicas URL `/space/<S>/replicas` exactly, its `allowedAction`
- *    is present, non-empty, and within {GET, HEAD, POST, PUT, DELETE}, its
+ *    is present, non-empty, and within {GET, POST, PUT, DELETE}, its
  *    parent is that Space's synthesized root, and the delegator's log is a
  *    replicated copy, not a log self-hosted here. No grantee bound and no
  *    pointer gate apply. This is the shape a replica server sees on a
@@ -307,7 +307,7 @@ const REPLICA_SERVER_SERVICE_TYPE = 'https://w3id.org/pws#ReplicaServer'
  * open `allowedAction` and any action outside the protocol, while the target
  * bound does the narrowing.
  */
-const WAS_ACTIONS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE']
+const WAS_ACTIONS = ['GET', 'POST', 'PUT', 'DELETE']
 
 /**
  * The reserved segment under a Space URL that addresses its Metadata object.
@@ -463,7 +463,7 @@ function hasReplicaPointer({
  * The target is the canonical trailing-slash URL of the account Space or of
  * the auxiliary Space carrying the annex log, and the parent is the Space's
  * synthesized root, whose target a canonical Space URL can only be; the
- * actions lie within {GET, HEAD}, the pull capability's verbs. The sole
+ * action is `GET`, the pull capability's verb. The sole
  * controller parses as a server identity, and equals the endpoint of a
  * `ReplicaServer` entry in the annex document the account document names,
  * which is resolved and verified from this server's storage (the
@@ -513,7 +513,7 @@ async function replicaPullAdmitted({
   if (
     spaceId === undefined ||
     !parentIsRoot ||
-    !actionsWithin({ capability, allowed: ['GET', 'HEAD'] }) ||
+    !actionsWithin({ capability, allowed: ['GET'] }) ||
     controllers.length !== 1 ||
     replicaDid === undefined ||
     !isServerIdentityDid(replicaDid) ||
@@ -1276,7 +1276,7 @@ export function clientAnnexChainInspector({
               "grant of that Space's Metadata URL or of one Resource in it, " +
               'nor a POST-only grant of that Space URL under a ' +
               "management capability the Space's controller delegated to the " +
-              'account, nor a GET/HEAD pull of the account Space or its ' +
+              'account, nor a GET pull of the account Space or its ' +
               'client-annex Space by a replica server the annex document ' +
               "points at, nor a maintenance grant on that Space's replicas " +
               'URL under its root.'

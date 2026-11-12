@@ -128,7 +128,7 @@ describe('Delegation-proof cryptosuites', () => {
         capability: rootCapabilityId(spaceUrl),
         invocationTarget: collectionUrl,
         controller: aliceDelegatedApp.did,
-        allowedActions: ['GET', 'HEAD'],
+        allowedActions: ['GET'],
         expires: anHourFromNow()
       })
       const proof = delegationProof(capability)
@@ -148,7 +148,7 @@ describe('Delegation-proof cryptosuites', () => {
         capability: rootCapabilityId(spaceUrl),
         invocationTarget: collectionUrl,
         controller: aliceDelegatedApp.did,
-        allowedActions: ['GET', 'HEAD'],
+        allowedActions: ['GET'],
         expires: anHourFromNow()
       })
       assert.equal(delegationProof(capability).type, 'Ed25519Signature2020')
@@ -170,7 +170,7 @@ describe('Delegation-proof cryptosuites', () => {
         capability: rootCapabilityId(spaceUrl),
         invocationTarget: collectionUrl,
         controller: aliceDelegatedApp.did,
-        allowedActions: ['GET', 'HEAD'],
+        allowedActions: ['GET'],
         expires
       })
       const child = await jcsClient({
@@ -194,7 +194,7 @@ describe('Delegation-proof cryptosuites', () => {
         capability: rootCapabilityId(spaceUrl),
         invocationTarget: collectionUrl,
         controller: aliceDelegatedApp.did,
-        allowedActions: ['GET', 'HEAD'],
+        allowedActions: ['GET'],
         expires
       })
       const child = await legacyClient({
@@ -218,7 +218,7 @@ describe('Delegation-proof cryptosuites', () => {
           capability: rootCapabilityId(spaceUrl),
           invocationTarget: collectionUrl,
           controller: aliceDelegatedApp.did,
-          allowedActions: ['GET', 'HEAD'],
+          allowedActions: ['GET'],
           expires: anHourFromNow()
         })
         const before = await readDoc({

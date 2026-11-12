@@ -3970,6 +3970,42 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         assert.equal(seen, undefined)
       })
 
+      it('hands the composition callback undefined over a Collection tombstone (a create)', async () => {
+        const { backend } = harness
+        await backend.writeCollection({
+          spaceId,
+          collectionId: 'at-tombstone',
+          collectionMetadata: {
+            id: 'at-tombstone',
+            type: ['Collection'],
+            name: 'First life'
+          }
+        })
+        await backend.deleteCollection({
+          spaceId,
+          collectionId: 'at-tombstone'
+        })
+        let seen: unknown = 'unset'
+        const written = await backend.writeCollection({
+          spaceId,
+          collectionId: 'at-tombstone',
+          collectionMetadata: ({ prior }) => {
+            seen = prior
+            return {
+              id: 'at-tombstone',
+              type: ['Collection'],
+              encryption: { scheme: 'edv' }
+            }
+          }
+        })
+        // A write over a tombstone is a create: the creation-only members
+        // (`encryption` among them) are declared freely, so the request
+        // layer must see no prior object here.
+        assert.equal(seen, undefined)
+        assert.equal(written.created, true)
+        assert.deepStrictEqual(written.metadata.encryption, { scheme: 'edv' })
+      })
+
       it('hands the composition callback the current object (and its validator) on an update, and persists what it returns', async () => {
         const { backend } = harness
         await backend.writeCollection({
@@ -9212,6 +9248,91 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           (await backend.getCollectionMetadata({ spaceId, collectionId }))!
             .name,
           'two'
+        )
+
+        // The held life declared no `encryption`, so a late declaration is a
+        // fork too, and nothing is stored.
+        const late = await backend.applyCollection({
+          spaceId,
+          replicaId,
+          collectionId,
+          collection: liveCollection({
+            collectionId,
+            generation: 'colGen',
+            stamp: stampAt(11_300),
+            created,
+            members: { name: 'four', encryption: { scheme: 'edv' } }
+          })
+        })
+        assert.equal(late.outcome, 'refused')
+        assert.equal(late.outcome === 'refused' && late.reason, 'fork')
+        const kept = (await backend.getCollectionMetadata({
+          spaceId,
+          collectionId
+        }))!
+        assert.equal(kept.name, 'two')
+        assert.equal(kept.encryption, undefined)
+      })
+
+      it('forks on a received `revisions` member off its default that the held life lacks', async () => {
+        const { backend } = harness
+        const collectionId = 'applied-late-revisions'
+        const created = stampAt(11_000)
+        await backend.applyCollection({
+          spaceId,
+          replicaId,
+          collectionId,
+          collection: liveCollection({
+            collectionId,
+            generation: 'colGen',
+            stamp: created,
+            members: { name: 'one' }
+          })
+        })
+
+        // An absent member stands for its default, so `immutable: true` is a
+        // change of a creation-only member, and nothing is stored.
+        const late = await backend.applyCollection({
+          spaceId,
+          replicaId,
+          collectionId,
+          collection: liveCollection({
+            collectionId,
+            generation: 'colGen',
+            stamp: stampAt(11_100),
+            created,
+            members: { name: 'two', revisions: { immutable: true } }
+          })
+        })
+        assert.equal(late.outcome, 'refused')
+        assert.equal(late.outcome === 'refused' && late.reason, 'fork')
+        const kept = (await backend.getCollectionMetadata({
+          spaceId,
+          collectionId
+        }))!
+        assert.equal(kept.name, 'one')
+        assert.equal(kept.revisions, undefined)
+
+        // A restated default changes nothing and is taken.
+        assert.deepEqual(
+          await backend.applyCollection({
+            spaceId,
+            replicaId,
+            collectionId,
+            collection: liveCollection({
+              collectionId,
+              generation: 'colGen',
+              stamp: stampAt(11_200),
+              created,
+              members: { name: 'three', revisions: { immutable: false } }
+            })
+          }),
+          { outcome: 'applied' }
+        )
+        assert.deepEqual(
+          (await backend.getCollectionMetadata({ spaceId, collectionId }))!
+            .revisions,
+          { immutable: false }
         )
       })
 
