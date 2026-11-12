@@ -54,6 +54,14 @@
 
 ### Changed
 
+- BREAKING: the capability action vocabulary is `GET`, `POST`, `PUT` and
+  `DELETE`. A `HEAD` request is authorized as a `GET`: its invocation names the
+  `GET` action, and a capability that permits `GET` permits it. A `HEAD` signed
+  with the action `HEAD` is refused as any action mismatch is (404). A replica
+  pull capability must carry `allowedAction` within `["GET"]`. The client-annex
+  clause refuses a ladder-signed delegation listing `HEAD`, and its replica pull
+  shape admits `GET` alone. The `signedInject` test helper signs a `HEAD` as
+  `GET`.
 - The write-once rule on an `immutable` Collection compares the digest of the
   bytes a write would store with the stored digest, and reads no stored bytes (a
   live filesystem sidecar with no digest is compared through a digest of its
@@ -63,6 +71,25 @@
   with `resource-immutable` (409). The repeat reclaims a file a torn delete left
   beside the tombstone. A tombstone with no digest (one an import wrote) still
   admits an ordinary create.
+- Breaking wire change: the Collection `encryption` descriptor is creation-only.
+  An Update Collection that adds `encryption` to an existing Collection without
+  one is refused with `encryption-immutable` (409). Create Collection, a create
+  by `PUT .../meta` (over a Collection tombstone too) and a governing history
+  log's guarded create still declare it. On the replication apply path, a
+  received update carrying `encryption` over a held Collection without one is
+  refused as a `fork`, and Register Replica refuses such a pair with
+  `replica-refused` (409).
+- On the replication apply path, a received `revisions.resolution` or
+  `revisions.immutable` other than its default, over a held Collection that
+  lacks the member, is refused as a `fork`. Register Replica refuses such a pair
+  with `replica-refused` (409).
+- Register Replica compares the immutable members of a Collection only when both
+  servers hold the same life of it (one generation). It leaves two Collections
+  under log governance to their logs, and refuses a governed Collection paired
+  with a client-written `encryption`. The refusal detail names the server that
+  declares the member.
+- Requires `@interop/pws-client` 0.108.0 (dev), which signs a `HEAD` under the
+  `GET` action.
 - Breaking wire change to `/service`. `serverDid` moves from `instance` to the
   core `https://w3id.org/pws` entry, beside `originId`. There is no alias under
   `instance`. The `https://w3id.org/pws/replication` entry now carries `url`.

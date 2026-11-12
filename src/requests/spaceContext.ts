@@ -15,7 +15,11 @@
  *   policy resource.
  */
 import type { FastifyRequest } from 'fastify'
-import { verifiedInvocation, verifyRequestZcap } from '../zcap.js'
+import {
+  capabilityActionOf,
+  verifiedInvocation,
+  verifyRequestZcap
+} from '../zcap.js'
 import type { VerifiedInvocation } from '../zcap.js'
 import type { ContainerRule } from '../lib/containerRule.js'
 import { authorize } from '../authorize.js'
@@ -159,7 +163,8 @@ async function fetchSpaceContext({
  * Fetches the Space and AUTHORIZES the request **capability-or-policy**:
  * capability invocation first, then the target's effective access-control policy
  * as a fallback (see authorize.ts). Use for read/list endpoints that may be
- * public-readable. The action checked is the request's HTTP method. Returns the
+ * public-readable. The action checked is the request's HTTP method, a `HEAD`
+ * checked as `GET` (see `capabilityActionOf`). Returns the
  * fetched Space Metadata object so callers that also serve it (Read Space)
  * need not fetch it twice, and what granted the request (`grantedBy`), so a
  * handler can serve some parts of a read only under a capability.
@@ -230,7 +235,8 @@ export async function fetchSpaceAndAuthorize({
  * Fetches the Space and VERIFIES the request **capability-only**: a valid
  * capability invocation is required, with no access-control-policy fallback (see
  * zcap.ts). Use for write/privileged endpoints and the controller-managed policy
- * resource. The action checked is the request's HTTP method. The Space's
+ * resource. The action checked is the request's HTTP method, a `HEAD` checked
+ * as `GET` (see `capabilityActionOf`). The Space's
  * revocation store is consulted on every delegated chain, so a revoked
  * capability fails here as it does on the `/kms` routes.
  *
@@ -281,7 +287,7 @@ export async function fetchSpaceAndVerify({
     request,
     peerWebvh: true,
     allowedTarget: context.allowedTarget,
-    allowedAction: request.method,
+    allowedAction: capabilityActionOf({ method: request.method }),
     spaceController: context.spaceMetadata.controller,
     requestName,
     attenuatedRootTarget: context.spaceRootTarget,

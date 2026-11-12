@@ -6,7 +6,7 @@
  * holds the descriptor's shape check, its transition check, the split of a
  * governing history log's `state` into the two descriptors it governs, and the
  * pieces of the write-once rule the request layer and both storage backends
- * share. It sits beside `encryption.ts`, whose set-once pattern it follows.
+ * share. It sits beside `encryption.ts`, whose creation-only pattern it follows.
  */
 import { isDeepStrictEqual } from 'node:util'
 import type {
@@ -42,7 +42,7 @@ const REVISIONS_MEMBERS: ReadonlySet<string> = new Set([
  * The two members that are set at creation and immutable afterward, each with
  * the value an absent member stands for.
  */
-const IMMUTABLE_MEMBER_DEFAULTS = {
+export const IMMUTABLE_MEMBER_DEFAULTS = {
   resolution: 'last-writer-wins',
   immutable: false
 } as const
@@ -129,7 +129,7 @@ export function assertValidRevisions({
 }
 
 /**
- * Enforces the set-once rule on `revisions.resolution` and
+ * Enforces the creation-only rule on `revisions.resolution` and
  * `revisions.immutable` between the stored descriptor and the one a write is
  * about to persist. An absent member stands for its default
  * (`last-writer-wins`, `false`), and each member is compared by the value it

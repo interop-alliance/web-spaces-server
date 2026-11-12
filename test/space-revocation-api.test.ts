@@ -96,7 +96,7 @@ describe('Space zcap revocations (/space/:spaceId/zcaps/revocations)', () => {
     target = collectionUrl,
     root = spaceUrl,
     controller = aliceDelegatedApp.did,
-    allowedActions = ['GET', 'HEAD', 'PUT', 'POST', 'DELETE']
+    allowedActions = ['GET', 'PUT', 'POST', 'DELETE']
   }: {
     target?: string
     root?: string
@@ -437,7 +437,7 @@ describe('Space zcap revocations (/space/:spaceId/zcaps/revocations)', () => {
       // chain; a capability that never verified cannot be recorded as revoked.
       const zcap = await sessionDelegate()
       const tampered = structuredClone(zcap)
-      tampered.allowedAction = ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH']
+      tampered.allowedAction = ['GET', 'PUT', 'POST', 'DELETE', 'PATCH']
 
       const err = await requestError(
         revoke({
@@ -496,7 +496,7 @@ describe('Space zcap revocations (/space/:spaceId/zcaps/revocations)', () => {
           signer: alice.signer,
           capability: rootZcap(spaceUrl)
         })
-        const tampered = { ...zcap, allowedAction: ['GET', 'HEAD', 'PUT'] }
+        const tampered = { ...zcap, allowedAction: ['GET', 'PUT'] }
         const err = await requestError(
           readDoc({ zcap: tampered, signer: aliceDelegatedApp.signer })
         )

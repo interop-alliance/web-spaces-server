@@ -1126,7 +1126,7 @@ export function replicaRegistration({
       parentCapability: rootCapabilityId(fromSpace),
       controller: 'did:webvh:scid:pws.example:space:server:id',
       invocationTarget: fromSpace,
-      allowedAction: ['GET', 'HEAD'],
+      allowedAction: ['GET'],
       expires: '2099-01-01T00:00:00Z',
       proof: {}
     } as unknown as ReplicaRegistration['capability'],

@@ -70,14 +70,14 @@ describe('Space-rooted session capabilities', () => {
       capability: `urn:zcap:root:${encodeURIComponent(spaceUrl)}`,
       invocationTarget: spaceUrl,
       controller: aliceDelegatedApp.did,
-      allowedActions: ['GET', 'HEAD']
+      allowedActions: ['GET']
     })
     collectionWriteCap = await delegate({
       signer: alice.signer,
       capability: `urn:zcap:root:${encodeURIComponent(spaceUrl)}`,
       invocationTarget: collectionUrl,
       controller: aliceDelegatedApp.did,
-      allowedActions: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE']
+      allowedActions: ['GET', 'PUT', 'POST', 'DELETE']
     })
   })
   afterAll(async () => {
@@ -221,7 +221,7 @@ describe('Space-rooted session capabilities', () => {
         capability: `urn:zcap:root:${encodeURIComponent(collectionUrl)}`,
         invocationTarget: collectionUrl,
         controller: aliceDelegatedApp.did,
-        allowedActions: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE']
+        allowedActions: ['GET', 'PUT', 'POST', 'DELETE']
       })
       await assert.rejects(
         aliceDelegatedApp.pws.request({
@@ -258,7 +258,7 @@ describe('Space-rooted session capabilities', () => {
         capability: `urn:zcap:root:${encodeURIComponent(bobSpaceUrl)}`,
         invocationTarget: bobSpaceUrl,
         controller: aliceDelegatedApp.did,
-        allowedActions: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE']
+        allowedActions: ['GET', 'PUT', 'POST', 'DELETE']
       })
       // Rejected either client-side (the invocation URL is not under the
       // capability's target) or server-side; the write must not land.

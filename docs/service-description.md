@@ -24,8 +24,8 @@ capability invocation. The `encryption` token says the server implements the
 Collection `encryption` descriptor as the spec's "Encryption Scheme Registry"
 section defines it: it recognizes the `edv` scheme, validates every write into a
 Collection declaring it against the envelope profile, refuses a scheme or
-version it does not recognize, keeps the descriptor set-once, and checks its
-key-epoch and `hmac` members.
+version it does not recognize, keeps the descriptor creation-only, and checks
+its key-epoch and `hmac` members.
 
 It also carries `originId`, the active backend's origin id, which a replication
 peer reads when it registers (see [replication.md](replication.md)).

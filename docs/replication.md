@@ -38,7 +38,7 @@ controller writes at `POST /space/:spaceId/replicas`
 - `fromSpace`, the peer Space's URL
 - `toSpace`, this Space's URL
 - `capability`, the pull capability, delegated to this server's DID with
-  `allowedAction` within `GET` and `HEAD`
+  `allowedAction` exactly `GET`
 - an optional `collections` list
 - `role`, which is `source`
 - `pausedAt`, present only while the pull loop is paused (see
@@ -192,7 +192,11 @@ peer, and a break of one is `replica-refused` (409). The checks are:
   [service-description.md](service-description.md)).
 - The peer Space, read through the capability, has the local Space's `type` set,
   and a controller the local one matches.
-- Each Collection both sides hold agrees on the immutable members.
+- Each Collection both sides hold as the same life (one generation) agrees on
+  the immutable members. Two lives of one id are not compared, since the apply
+  path replaces one or skips the other and merges neither. Two Collections under
+  log governance are left to their logs. A governed Collection paired with one
+  that stores a client-written `encryption` is refused.
 
 The peer Space's id need not equal the local one.
 
@@ -368,7 +372,12 @@ round a two-way pair. Three records follow other rules:
 An update of a held life replaces the object except for the members that are
 immutable once set (`encryption`, `revisions.resolution`, `revisions.immutable`,
 and `backend`, which keeps the held selection). One the received object omits is
-kept, and two different set values are a fork.
+kept, and two different set values are a fork. An `encryption` descriptor the
+received object carries and the held one lacks is a fork as well, since only the
+write that creates a Collection declares it. An absent `revisions.resolution` or
+`revisions.immutable` stands for its default. A received value other than the
+default over a held object that lacks the member is a fork, and a restated
+default is taken.
 
 Each apply method runs inside the critical section the matching request-layer
 write takes, and checks there, in order:

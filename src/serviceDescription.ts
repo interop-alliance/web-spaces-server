@@ -78,8 +78,8 @@ import {
  *   `custom` write into a Collection declaring it is validated against the
  *   envelope profile (`encryption-scheme-mismatch`), an unrecognized scheme or
  *   version is refused (`unsupported-encryption-scheme`), the descriptor is
- *   set-once and version-monotonic (`encryption-immutable`), and its key-epoch
- *   and `hmac` members are checked (`lib/encryption.ts`).
+ *   creation-only and version-monotonic (`encryption-immutable`), and its
+ *   key-epoch and `hmac` members are checked (`lib/encryption.ts`).
  * - `created-by`: the server records `createdBy` on every Resource,
  *   Collection, and Space created under a capability invocation
  *   (`invokerDid`). A create the provisioning policy granted verifies no

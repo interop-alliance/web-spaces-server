@@ -393,8 +393,13 @@ Containment: **SpacesRepository > Space > Collection > Resource**.
   Collection Metadata object, at `/space/:spaceId/:collectionId/meta`, holds its
   configuration (`backend`, `encryption`, `generator`, `revisions`) and its
   annotation (`custom`, `epoch`) under one `ETag`; `PUT` there is a full
-  replacement that creates the Collection when absent. It carries `created`, its
-  creating stamp. Deleting it leaves a Collection tombstone.
+  replacement that creates the Collection when absent. `encryption`,
+  `revisions.resolution` and `revisions.immutable` are creation-only: the write
+  that creates the Collection declares them (a governing log's guarded create
+  too), and an update that adds, changes or clears one is refused (see
+  [docs/governed-logs-and-revisions.md](docs/governed-logs-and-revisions.md)).
+  It carries `created`, its creating stamp. Deleting it leaves a Collection
+  tombstone.
 - **Creating stamp** -- the write stamp of the write that created a Collection,
   served as the Collection Metadata object's `created` member and kept for the
   Collection's life. A create over a tombstone records a new one, and an import
@@ -510,6 +515,13 @@ restrictions": `controller` (who, a DID) / `allowedAction` (what, e.g. HTTP
 verbs) / `invocationTarget` (with, a URL) / caveats like `expires` (given). A
 delegated zcap also carries `parentCapability` and a `proof` with a
 `capabilityChain`; a root zcap carries none of those.
+
+The PWS action vocabulary is `GET`, `POST`, `PUT` and `DELETE`. The expected
+action is the request's HTTP method, with one exception. A `HEAD` request is
+authorized as a `GET`: its invocation names the `GET` action, and a capability
+that permits `GET` permits it. `HEAD` is not an action of its own.
+`capabilityActionOf` in `zcap.ts` is the one place that maps a method to its
+action.
 
 **Root vs delegated invocation** (the `Capability-Invocation` header):
 

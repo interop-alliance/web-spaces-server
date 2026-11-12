@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 246
+nextAvailableId: 258
 
 <!-- roadmap-order:index:start -->
 
@@ -27,10 +27,22 @@ Ready:
   write
 - WSS-220 [M] (*) A Resource write repairs a Collection copy the data backend
   lost
+- WSS-246 [M] (*) An empty or omitted `custom` on an encrypted Collection is a
+  clearing write
+- WSS-247 [M] (*) The export's `service.json` is the document `/service` serves
+- WSS-248 [M] (*) Import across backends skips the policy of a Resource it
+  skipped
 - WSS-181 [L] (*) Pin that a sidecar imported without timestamps is served with
   both on each backend
 - WSS-83 [L] (*) Anonymous Get Policy with a malformed id now returns 401
 - WSS-193 [L] (*) `epoch` moves on a `/meta` write without a content stamp
+- WSS-249 [L] (*) Import checks the manifest's position and its one Space
+- WSS-251 [L] (*) The quota report covers every backend the Space lists
+
+Waiting on another repo:
+
+- WSS-250 [L] (*) A backend registration's `Location` names a URL that answers
+  405 (after WASS-98)
 
 **Spec and protocol**
 
@@ -43,8 +55,14 @@ Ready:
 - WSS-64 [M] (*) Default document for public collections (`index.html`)
 - WSS-162 [M] (*) Research verifying zcap invocations signed by a did:webvh
   hosted elsewhere
-- WSS-194 [M] (*) `encryption` is declared only when the Collection is created
 - WSS-219 [L] (*) Changing a Collection's `backend.id` once it holds Resources
+- WSS-252 [L] (*) Point the Encrypted Collections entry's `url` at the published
+  profile
+- WSS-253 [L] (*) Expose `Retry-After` to browser clients
+- WSS-254 [L] (*) Bound the length of a Space, Collection and Resource id
+- WSS-255 [L] (*) Stop accepting the root capability of a query-bearing URL
+- WSS-256 [L] (*) Answer a multipart request with too many parts as
+  `invalid-request-body`
 
 **Features**
 
@@ -93,6 +111,8 @@ Ready:
 - WSS-221 [L] (*) Registration check under the data backend's lock for a
   Resource apply
 - WSS-229 [L] (*) A pause stops an in-flight pull cycle at its next apply
+- WSS-257 [L] (*) A delegated `PUT` may keep a paused mapping registration
+  paused
 
 **Performance**
 
@@ -487,6 +507,75 @@ re-check there answers 404 for a Collection that exists, and retrying the
 Resource write never repairs it; only a Collection Metadata write does. The two
 writers of one state recover differently after the same torn write.
 
+### WSS-246: [M] (*) An empty or omitted `custom` on an encrypted Collection is a clearing write
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: encryption, metadata, spec
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] A Resource `/meta` `PUT` with `custom: {}`, or with no `custom`, on an
+        encrypted Collection clears the member and is not held to the envelope
+        check
+  - [ ] An Update Collection with `custom: {}` on an encrypted Collection does
+        the same
+  - [ ] A non-empty `custom` that is not an envelope is still refused with
+        `encryption-scheme-mismatch` (422)
+  - [ ] A test covers each of the three cases, at both levels
+
+`resolveMetadataCustom` (`src/lib/customMetadata.ts`) hands `custom` to
+`assertEncryptedMetaConforms` whenever the Collection has an encryption scheme.
+An empty object and an absent value both fail `isValidEdvDocument`, so both
+answer 422. The Collection path skips an omitted `custom` before the call
+(`collectionInput.ts`), and nothing skips an empty one. The spec's write
+validation text says an empty or omitted `custom` is a clearing write and is not
+validated. No test sends either body.
+
+### WSS-247: [M] (*) The export's `service.json` is the document `/service` serves
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: export, service-description, server-identity
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] On a server with an identity, the archive's `service.json` carries
+        `instance.exportSigningMethod` and `serverDid` whenever `/service` does,
+        and is byte-identical to that response
+  - [ ] The export test that compares the two runs with an identity configured
+  - [ ] `docs/service-description.md` and `docs/export-import.md` describe what
+        the archive carries
+
+The Export handler (`SpaceRequest.ts`) calls `buildServiceDescription` with
+`serverUrl`, `originId` and `discloseVersion` only, so the identity members are
+left out. The spec's Export Space operation requires the entry to be the served
+document. `docs/service-description.md` says the archive carries both members.
+The existing test passes because it boots without an identity.
+
+### WSS-248: [M] (*) Import across backends skips the policy of a Resource it skipped
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: import, policy, backends
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] For a Collection on a backend other than the control plane, an archived
+        Resource policy is stored only when that backend imported the Resource
+  - [ ] A Collection that already existed keeps its Resource policies as they
+        were
+  - [ ] A test imports an archive into a Space that already holds one of its
+        Resources on the second backend and reads the policy back unchanged
+
+`importAcrossBackends.ts` gives the control plane every archived Resource policy
+of such a Collection as `detachedResourcePolicies`, before the data backend has
+decided which Resources it skips. The spec's Import Space text skips a policy
+along with its Resource. On one backend the import already does this.
+
 ### WSS-181: [L] (*) Pin that a sidecar imported without timestamps is served with both on each backend
 
 - status: todo
@@ -558,6 +647,68 @@ Context (discovered-from: WSS-172 review). The WSS-96 design assigns `epoch` and
 but it still stores `epoch`, and it mints only the `/meta` stamp. A peer that
 orders by content stamps would not see that change as a content revision.
 
+### WSS-249: [L] (*) Import checks the manifest's position and its one Space
+
+- status: todo
+- priority: low
+- backend: *
+- labels: import, archive, spec
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- touches:
+  - space-archive: `spaceManifestEntry` lists `.space.policy.json` with no
+    `url`, where the spec gives a policy file the access-control-policies `url`;
+    filed there as SAR-11
+- acceptance:
+  - [ ] An archive whose first entry is not `manifest.yml` is refused with
+        `invalid-import`
+  - [ ] A manifest whose `contents.space.contents` does not name exactly one
+        Space is refused with `invalid-import`
+  - [ ] A root file is recognized only in the position the archive format gives
+        it, not by name anywhere in the archive
+
+`validateManifest` (`src/lib/importTar.ts`) checks neither rule, and the
+importer finds `manifest.yml`, `service.json` and the provenance files wherever
+they appear. The spec's manifest section requires both refusals.
+
+### WSS-250: [L] (*) [after WASS-98] A backend registration's `Location` names a URL that answers 405
+
+- status: todo
+- priority: low
+- backend: *
+- labels: backends, wire-contract
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- blocked-by: WASS-98
+- acceptance:
+  - [ ] The `Location` of a created registration resolves, either through a
+        `GET` of one registration or by naming the listing
+  - [ ] A test follows the header
+
+`POST /space/:spaceId/backends` and the creating `PUT` set `Location` to
+`/space/:spaceId/backends/:backendId`. That URL registers `PUT` and `DELETE`
+only, so a `GET` answers 405. Whether one registration is readable is the spec
+item's decision.
+
+### WSS-251: [L] (*) The quota report covers every backend the Space lists
+
+- status: todo
+- priority: low
+- backend: *
+- labels: quotas, backends
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] Decided whether the report carries an entry for the `default` alias, or
+        only one entry per backend under its fixed id
+  - [ ] A registered external backend appears in the report, or the report says
+        why it cannot (the server holds no usage figure for it)
+  - [ ] `docs/` states the rule
+
+`SpaceRequest.quotas` reports `serverBackends.all()` only. The backends listing
+of the same Space also carries `default` and each registered external backend,
+and the spec's quota example shows both kinds.
+
 ## Spec and protocol
 
 Conformance gaps against the spec, spec-side proposals this server would
@@ -604,6 +755,12 @@ implement once decided, and research that may end in either.
   - was-conformance-suite: create/read/list/delete cases for ids containing
     reserved and non-ASCII characters, plus export/import round-trip
 - acceptance:
+  - [ ] Listings order ids by Unicode code point on both backends (WASS-129).
+        `compareCodeUnits` (`src/lib/pagination.ts`) compares UTF-16 code units,
+        which differs from Postgres `COLLATE "C"` for an id with a character
+        above U+FFFF. Every in-memory sort and seek uses the same rule as the
+        SQL order, and a test lists ids that separate the two orders on each
+        backend
   - [ ] The id validators accept any single decoded path segment: non-empty, not
         `.` or `..`, containing no `/` (the spec's only syntax rule) and no `\`;
         the unreserved-only pattern is gone from the accept path
@@ -710,43 +867,6 @@ keeps the member layout open for account DIDs, pending this item.
 
 ---
 
-### WSS-194: [M] (*) `encryption` is declared only when the Collection is created
-
-- status: todo
-- priority: medium
-- backend: *
-- labels: collection-metadata, encryption, wire-contract
-- discovered-from: WSS-173 (2026-10-03)
-- touches:
-  - portable-web-spaces-spec: WASS-49 (the sentence permitting a declaration on
-    a Collection that lacks one is withdrawn)
-  - pws-client: the `edv` branch of `sync/provisioning.ts`, which declares
-    `encryption` on an existing Collection, is removed
-  - was-react: `markCollectionEncrypted` is removed (shipped in 0.28.0,
-    2026-10-11)
-  - dcw: the sync smoke test is checked for the `edv` default
-  - conformance-suite: a case for the late-declaration refusal
-- acceptance:
-  - [ ] An Update Collection that adds `encryption` to an existing Collection
-        that lacks one is refused with `encryption-immutable` (409); Create
-        Collection, a create by `PUT .../meta`, and a governing log's guarded
-        create still declare it
-  - [ ] `assertEncryptionDescriptorTransition`, `assertEncryptionTransition`,
-        and the `EncryptionImmutableError` comment no longer describe late
-        declaration as allowed
-  - [ ] Tests that declare `encryption` on an existing Collection are rewritten
-        to declare it at creation, and a test pins the refusal
-  - [ ] ARCHITECTURE.md and CHANGELOG.md updated
-
-Context: spec decision 0012 makes the immutable Collection descriptors
-creation-only. Under replication, a late first set of `encryption` on one server
-and a concurrent full replacement without it on another both pass their own
-transition check, and last-writer-wins converges on an object with `encryption`
-gone. WSS-173 shipped the `revisions` half of the rule. This item is the
-`encryption` half. It removes a path pws-client and was-react still use as
-fallbacks, so it lands with their removal. The App Connect flow already creates
-its Collections encrypted from birth.
-
 ### WSS-219: [L] (*) Changing a Collection's `backend.id` once it holds Resources
 
 - status: todo
@@ -762,9 +882,11 @@ its Collections encrypted from birth.
         backend checks that the Resource is live on that backend, under its lock
         where possible, before the control plane stores the policy
 
-Today the selection may change freely; the Resources already written stay on the
-backend they were written to and are no longer served, on a registered external
-backend as on a server backend.
+An Update Collection that selects a different backend is refused today with
+`backend-immutable` (409), whether or not the Collection holds Resources. A body
+may restate the selection under another id of the same backend. Moving the
+Resources is the open half of the decision, and the spec text for the refusal is
+tracked as WASS-99.
 
 Related gap, from the feed work of 2026-10-22: Update Policy passes
 `requireLiveResource: false` whenever the Collection's data backend is not the
@@ -773,6 +895,125 @@ Resource there, and the copy the data backend keeps is written under the same
 flag so the copy cannot fail after the control-plane write. Both the server
 backends can check liveness in their own store; only a registered external
 backend cannot. The check belongs with the data-plane routing this item settles.
+
+### WSS-252: [L] (*) Point the Encrypted Collections entry's `url` at the published profile
+
+- status: todo
+- priority: low
+- backend: *
+- labels: service-description, discovery
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] The entry's `url` in `config.default.ts` is the page the profile is
+        published at, under `portable-web-spaces-spec/ec/`
+  - [ ] `docs/service-description.md` and any test fixture carry the same value
+
+The entry still lists
+`https://interop-alliance.github.io/encrypted-collections-spec/`. The profile
+moved into the PWS spec repo and is published beside the core document.
+
+### WSS-253: [L] (*) Expose `Retry-After` to browser clients
+
+- status: todo
+- priority: low
+- backend: *
+- labels: cors, wire-contract
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] `Retry-After` is in the CORS `exposedHeaders` list beside `Location`,
+        `ETag`, `Link` and `Allow`
+  - [ ] A test reads it from the 503 Update Space answers under contention
+
+Update Space answers 503 with `Retry-After: 1` when its write loses repeated
+races. `plugin.ts` does not expose the header, so a browser client cannot read
+it.
+
+### WSS-254: [L] (*) Bound the length of a Space, Collection and Resource id
+
+- status: todo
+- priority: low
+- backend: *
+- labels: ids, validation
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [ ] A test establishes what an over-long id does today on each backend
+  - [ ] An id past a stated length is refused with `invalid-id` (400) on both
+        backends, before any storage call
+  - [ ] The limit is one both backends can store, and `docs/` names it
+
+`validateId.ts` checks the charset and no length. The spec says an
+implementation SHOULD limit it. On the filesystem backend an id longer than a
+file name allows would most likely surface as a 500, since nothing handles
+`ENAMETOOLONG`; Postgres would store it. That outcome is inferred and has no
+test. The length chosen is a wire-visible limit and needs sign-off.
+
+### WSS-255: [L] (*) Stop accepting the root capability of a query-bearing URL
+
+- status: todo
+- priority: low
+- backend: *
+- labels: zcap, authorization, spec
+- discovered-from: the spec-vs-server audit (2026-11-12)
+- blocked-by: WCL-160
+- touches:
+  - pws-client: WCL-160 makes the client send the root of the URL without its
+    query; this item waits on a published version carrying it
+  - portable-web-spaces-spec: WASS-121 (the note that allows the second form
+    until then)
+  - pws-conformance-suite: any case that invokes a query URL's own root
+  - webkms-client: List Keys under `/kms` uses the same option; check what its
+    client sends before the `/kms` route changes
+- acceptance:
+  - [ ] `expectedRoots` (`src/zcap.ts`) no longer adds the full request URL
+        under `allowTargetQuery`; the option only lets a query extend the target
+  - [ ] A root invocation naming the query-bearing URL's root answers the masked
+        `not-found`, on every route that sets the option
+  - [ ] A root invocation naming the root of the URL without its query still
+        verifies, as does a delegated capability targeting the container
+  - [ ] ARCHITECTURE.md's `allowTargetQuery` paragraph and the JSDoc on
+        `expectedRoots` say what the option does afterward
+  - [ ] The dependency on pws-client is at a version that carries WCL-160
+
+On a read that carries a query, the server accepts two root ids: the root of the
+target without the query, which is the profile's rule, and the root of the full
+request URL. The second exists because the client derives the id from the URL as
+given. It grants nothing extra, since both roots have the Space's controller. It
+is still a form the profile does not describe, kept only until the client stops
+sending it.
+
+### WSS-256: [L] (*) Answer a multipart request with too many parts as `invalid-request-body`
+
+- status: todo
+- priority: low
+- backend: *
+- labels: errors, multipart, wire-contract
+- discovered-from: the spec-vs-server audit (2026-11-12)
+- touches:
+  - portable-web-spaces-spec: WASS-104 states the rule (a part-count overflow is
+    a 400, and a non-file field is ignored)
+  - pws-conformance-suite: a case for the part-count refusal, if the suite
+    covers the optional multipart form
+- acceptance:
+  - [ ] `FST_PARTS_LIMIT`, `FST_FIELDS_LIMIT` and `FST_FILES_LIMIT` are answered
+        `invalid-request-body` (400) with a detail naming the limit that was
+        passed, not `payload-too-large` (413)
+  - [ ] `FST_REQ_FILE_TOO_LARGE` and `FST_ERR_CTP_BODY_TOO_LARGE` stay
+        `payload-too-large` (413)
+  - [ ] A test sends a multipart write with more parts than the parser accepts
+        and reads the 400
+  - [ ] `docs/request-pipeline.md` lists which over-limit errors are a 413 and
+        which a 400
+
+`handleError` maps every over-limit error the framework raises to
+`payload-too-large` (`FRAMEWORK_TOO_LARGE_DETAILS` in `src/errors.ts`). Three of
+them are about how many parts a multipart body has, not how many bytes. A client
+that answers a 413 by sending fewer bytes does not fix those. A second file part
+is already a 400, raised by `readMultipartFile` before the file-count limit is
+reached, so in practice the part-count limit (1000 by default) is the reachable
+one.
 
 ## Features
 
@@ -1550,6 +1791,40 @@ registration inside its critical section (`registrationStands` in
 registration still stands under that check. Extending the check to `pausedAt`
 (both backends read the stored record there already) puts the pause on the same
 mechanism as the removal, with no cancellation state in the manager.
+
+### WSS-257: [L] (*) A delegated `PUT` may keep a paused mapping registration paused
+
+- status: todo
+- priority: low
+- backend: *
+- labels: replication, zcap, authorization
+- discovered-from: the spec-vs-server audit (2026-11-12)
+- touches:
+  - portable-web-spaces-spec: WASS-113 states the refusal as a pause of a
+    running registration
+  - app-connect-spec: ACS-24 (predicate 7's amended text)
+  - pws-conformance-suite: a case for a delegated capability replacement on a
+    paused mapping registration
+- acceptance:
+  - [ ] A delegated `PUT` carrying `pausedAt` on the registration that maps the
+        Space's controller is refused only when the stored registration is not
+        paused
+  - [ ] The same `PUT` on a registration the controller already paused is
+        admitted and leaves `pausedAt` at its stored value, so a delegated
+        caller can replace the pull capability without resuming the loop
+  - [ ] The decision is made under the write's lock, from the registration read
+        there, as the delegated create bound is
+  - [ ] `docs/replication.md` and ARCHITECTURE.md's replication entry describe
+        the refusal as a change from running to paused
+
+`assertDelegatedPauseKeepsControllers` runs whenever a delegated body carries
+`pausedAt`, whatever the stored state. So once the controller has paused the
+mapping registration by root invocation, a delegated caller renewing its pull
+capability must drop `pausedAt`, which resumes the loop, or be refused. The
+refusal exists so a delegated grant cannot stop the copy of the controller's
+log. A caller that leaves an existing pause in place is not stopping anything.
+This matters only for an account that holds a root-invoking key, since no one
+else can have paused it.
 
 ## Performance
 

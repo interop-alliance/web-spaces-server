@@ -987,7 +987,7 @@ describe('did:webvh Space controller', () => {
         capability: `urn:zcap:root:${encodeURIComponent(spaceUrl)}`,
         invocationTarget: spaceUrl,
         controller: bob.did,
-        allowedActions: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE']
+        allowedActions: ['GET', 'POST', 'PUT', 'DELETE']
       })
     })
 

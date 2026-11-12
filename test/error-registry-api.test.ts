@@ -75,7 +75,7 @@ describe('Error registry wire coverage', () => {
           json: { id: collectionId, encryption: { scheme: 'aes-gcm-siv' } }
         })
       )
-      // The fail-closed scheme gate fires before the set-once 409 check.
+      // The fail-closed scheme gate fires before the `encryption-immutable` 409 check.
       assert.equal(err.response.status, 400)
       assert.equal(
         err.data.type,
@@ -90,7 +90,7 @@ describe('Error registry wire coverage', () => {
 
     // The descriptor-CLEAR path is reachable since v0.5: the merged
     // `PUT .../meta` is a full replacement, so a body that omits `encryption`
-    // on an encrypted Collection is an attempt to clear the set-once
+    // on an encrypted Collection is an attempt to clear the creation-only
     // descriptor (spec "Update Collection": `encryption-immutable`).
     it('omitting `encryption` on an encrypted Collection is encryption-immutable (409)', async () => {
       const collectionId = 'immutable-clear-wire'

@@ -893,6 +893,21 @@ export async function handleZcapVerify({
 }
 
 /**
+ * The capability action a PWS request invokes, read off its HTTP method. The
+ * action vocabulary is `GET`, `POST`, `PUT` and `DELETE`. `HEAD` is not an
+ * action of its own. A `HEAD` request is authorized as a `GET`: its invocation
+ * names the `GET` action, and a capability that permits `GET` permits it. The
+ * HTTP signature still covers the request's real method.
+ *
+ * @param options {object}
+ * @param options.method {string}   the HTTP method of the request
+ * @returns {string}   the expected capability action
+ */
+export function capabilityActionOf({ method }: { method: string }): string {
+  return method === 'HEAD' ? 'GET' : method
+}
+
+/**
  * {@link handleZcapVerify} for a Fastify request: the request URL, method and
  * headers, the server's base URL, the request logger and the local
  * `did:webvh` resolver context (the control plane, the backend set and the

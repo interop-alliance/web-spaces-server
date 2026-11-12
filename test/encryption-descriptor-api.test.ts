@@ -1,8 +1,9 @@
 /**
  * Encryption-descriptor API tests (Vitest): the server's accept / validate /
- * persist / set-once handling of a Collection's client-side `encryption` descriptor
- * (spec "Encrypted Collections"). The server never decrypts -- it stores the
- * descriptor opaquely, validates only its shape, and enforces set-once immutability.
+ * persist / creation-only handling of a Collection's client-side `encryption`
+ * descriptor (spec "Encrypted Collections"). The server never decrypts -- it
+ * stores the descriptor opaquely, validates only its shape, and refuses an
+ * update that adds, changes or clears it.
  *
  * These assert the server's wire contract directly (status codes, problem
  * `type`s, the echoed Metadata object) via the signed `pws.request()` escape hatch
@@ -148,19 +149,114 @@ describe('Encryption descriptor API', () => {
     assert.equal(err.data.errors?.[0]?.pointer, '#/encryption/scheme')
   })
 
-  it('allows declaring a descriptor on an existing plaintext collection (absent -> present)', async () => {
+  it('refuses declaring a descriptor on an existing plaintext collection (409 encryption-immutable, object unchanged)', async () => {
+    // The descriptor is creation-only: an update cannot add one to a
+    // Collection created without it.
     const collectionId = 'late-declare'
     await alice.pws.request({
       url: `${baseServerUrl}space/${spaceId}/`,
       method: 'POST',
       json: { id: collectionId, name: 'Late' }
     })
+    const before = await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+      method: 'GET'
+    })
+    const err = await rejection(
+      alice.pws.request({
+        url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+        method: 'PUT',
+        json: {
+          id: collectionId,
+          name: 'Late',
+          encryption: { scheme: 'edv' }
+        }
+      })
+    )
+    assert.equal(err.response.status, 409)
+    assert.match(err.data.type, /#encryption-immutable/)
+    assert.equal(err.data.errors?.[0]?.pointer, '#/encryption')
+    const after = await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+      method: 'GET'
+    })
+    assert.equal(after.headers.get('etag'), before.headers.get('etag'))
+    assert.deepStrictEqual(after.data, before.data)
+    assert.equal(after.data.encryption, undefined)
+  })
+
+  it('refuses declaring a descriptor on an existing collection under If-Match (409)', async () => {
+    // A current validator does not turn the update into a create.
+    const collectionId = 'late-declare-cas'
+    await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/`,
+      method: 'POST',
+      json: { id: collectionId }
+    })
+    const before = await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+      method: 'GET'
+    })
+    const err = await rejection(
+      alice.pws.request({
+        url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+        method: 'PUT',
+        headers: { 'if-match': before.headers.get('etag') },
+        json: { id: collectionId, encryption: { scheme: 'edv' } }
+      })
+    )
+    assert.equal(err.response.status, 409)
+    assert.match(err.data.type, /#encryption-immutable/)
+    assert.equal((await readDesc(collectionId)).encryption, undefined)
+  })
+
+  it('declares a descriptor on a create by PUT (absent collection, 201)', async () => {
+    const collectionId = 'put-create-declare'
     const put = await alice.pws.request({
       url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
       method: 'PUT',
       json: { id: collectionId, encryption: { scheme: 'edv' } }
     })
-    assert.equal(put.status, 204)
+    assert.equal(put.status, 201)
+    assert.deepStrictEqual((await readDesc(collectionId)).encryption, {
+      scheme: 'edv'
+    })
+  })
+
+  it('declares a descriptor on a guarded create by PUT (If-None-Match: *, 201)', async () => {
+    const collectionId = 'guarded-create-declare'
+    const put = await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+      method: 'PUT',
+      headers: { 'if-none-match': '*' },
+      json: { id: collectionId, encryption: { scheme: 'edv' } }
+    })
+    assert.equal(put.status, 201)
+    assert.deepStrictEqual((await readDesc(collectionId)).encryption, {
+      scheme: 'edv'
+    })
+  })
+
+  it('declares a descriptor on a create by PUT over a Collection tombstone (201)', async () => {
+    // A write over a tombstone is a create, so it may declare the descriptor
+    // the deleted life lacked.
+    const collectionId = 'tombstone-declare'
+    await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/`,
+      method: 'POST',
+      json: { id: collectionId }
+    })
+    const deleted = await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/`,
+      method: 'DELETE'
+    })
+    assert.equal(deleted.status, 204)
+    const put = await alice.pws.request({
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/meta`,
+      method: 'PUT',
+      json: { id: collectionId, encryption: { scheme: 'edv' } }
+    })
+    assert.equal(put.status, 201)
     assert.deepStrictEqual((await readDesc(collectionId)).encryption, {
       scheme: 'edv'
     })
@@ -184,7 +280,7 @@ describe('Encryption descriptor API', () => {
   it('rejects changing to an unrecognized scheme (400 unsupported-encryption-scheme, descriptor unchanged)', async () => {
     // With v1 recognizing only `edv`, a scheme *change* names a scheme the
     // server cannot enforce, so the fail-closed `unsupported-encryption-scheme`
-    // gate fires first -- before the set-once `encryption-immutable` (409) check,
+    // gate fires first -- before the `encryption-immutable` (409) check,
     // which the direct-transition unit test below still exercises. Either way the
     // stored descriptor cannot be corrupted.
     const collectionId = 'immutable'

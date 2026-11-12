@@ -45,7 +45,7 @@ import type { ServerSigningKey } from './lib/serverIdentity.js'
 import { WEBVH_LOG_RESOURCE_ID } from './lib/validateDid.js'
 import { composeApp, createApp, createInstance } from './server.js'
 import type { PeerFetch } from './sync/peerFetch.js'
-import { rootCapabilityId } from './zcap.js'
+import { capabilityActionOf, rootCapabilityId } from './zcap.js'
 import type { IDID, StorageBackend } from './types.js'
 
 export { RequestFaults, RequestFaultDisarmedError }
@@ -749,7 +749,8 @@ export async function bootPeerServer({
  * `fastify.inject`, signed as a client would sign it: a capability
  * invocation of the root capability of the Space the path is under, unless
  * `capability` names another, with a `host` header naming the server URL's
- * host.
+ * host. The invocation names the method's capability action, so a `HEAD` is
+ * signed as `GET`.
  *
  * @param options {object}
  * @param options.server {{ fastify: FastifyInstance, serverUrl: string }}
@@ -802,7 +803,7 @@ export async function signedInject({
     ...(json !== undefined && { json }),
     ...(body !== undefined && { body }),
     capability: capability ?? rootCapabilityId(spaceUrl),
-    capabilityAction: method,
+    capabilityAction: capabilityActionOf({ method }),
     invocationSigner: signer
   })
   let payload: string | Buffer | undefined

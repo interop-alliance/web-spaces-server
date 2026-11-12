@@ -2,7 +2,7 @@
  * Unit tests for the encryption-scheme library helpers (spec "Encryption Scheme
  * Registry"): the `edv` JWE structural validator (`isValidEdvEnvelope`), the EDV
  * Encrypted Document validator (`isValidEdvDocument`), the fail-closed scheme
- * gate (`assertSupportedEncryption`), the set-once transition check
+ * gate (`assertSupportedEncryption`), the creation-only transition check
  * (`assertEncryptionTransition`), the Resource-content-write conformance gate
  * (`assertEncryptedWriteConforms`), and the Resource-metadata conformance gate
  * (`assertEncryptedMetaConforms`). These cover the pure logic directly,
@@ -159,12 +159,16 @@ describe('assertSupportedEncryption', () => {
 })
 
 describe('assertEncryptionTransition', () => {
-  it('is a no-op declaring a descriptor on a Collection that lacks one', () => {
-    assert.doesNotThrow(() =>
-      assertEncryptionTransition({
-        existing: undefined,
-        incoming: { scheme: 'edv' }
-      })
+  it('throws EncryptionImmutableError (409) declaring a descriptor on a Collection that lacks one', () => {
+    // Creation-only: the create declares the descriptor, so an update of a
+    // stored Collection without one cannot add it.
+    throwsImmutablePointer(
+      () =>
+        assertEncryptionDescriptorTransition({
+          stored: {},
+          incoming: { scheme: 'edv' }
+        }),
+      '#/encryption'
     )
   })
   it('is a no-op re-sending the same scheme', () => {
@@ -412,7 +416,7 @@ describe('assertEncryptionHmacTransition', () => {
     throwsImmutablePointer(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: hmacDescriptor(),
+          stored: { encryption: hmacDescriptor() },
           incoming: { scheme: 'edv' }
         }),
       '#/encryption/hmac'
@@ -424,7 +428,7 @@ describe('assertEncryptionHmacTransition', () => {
     throwsImmutablePointer(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: hmacDescriptor(),
+          stored: { encryption: hmacDescriptor() },
           incoming
         }),
       '#/encryption/hmac/id'
@@ -436,7 +440,7 @@ describe('assertEncryptionHmacTransition', () => {
     throwsImmutablePointer(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: hmacDescriptor(),
+          stored: { encryption: hmacDescriptor() },
           incoming
         }),
       '#/encryption/hmac/type'
@@ -509,7 +513,9 @@ describe('assertEncryptionDescriptorTransition (scheme version)', () => {
   it('allows keeping the same version', () => {
     assert.doesNotThrow(() =>
       assertEncryptionDescriptorTransition({
-        existing: { scheme: 'edv', version: 1 } as CollectionEncryption,
+        stored: {
+          encryption: { scheme: 'edv', version: 1 } as CollectionEncryption
+        },
         incoming: { scheme: 'edv', version: 1 } as CollectionEncryption
       })
     )
@@ -519,7 +525,9 @@ describe('assertEncryptionDescriptorTransition (scheme version)', () => {
     // storable is the recognition gate's call (`assertSupportedEncryption`).
     assert.doesNotThrow(() =>
       assertEncryptionDescriptorTransition({
-        existing: { scheme: 'edv', version: 1 } as CollectionEncryption,
+        stored: {
+          encryption: { scheme: 'edv', version: 1 } as CollectionEncryption
+        },
         incoming: { scheme: 'edv', version: 2 } as CollectionEncryption
       })
     )
@@ -527,7 +535,7 @@ describe('assertEncryptionDescriptorTransition (scheme version)', () => {
   it('allows adding a version to a versionless descriptor', () => {
     assert.doesNotThrow(() =>
       assertEncryptionDescriptorTransition({
-        existing: { scheme: 'edv' },
+        stored: { encryption: { scheme: 'edv' } },
         incoming: { scheme: 'edv', version: 1 } as CollectionEncryption
       })
     )
@@ -535,7 +543,7 @@ describe('assertEncryptionDescriptorTransition (scheme version)', () => {
   it('is a no-op when neither descriptor carries a version', () => {
     assert.doesNotThrow(() =>
       assertEncryptionDescriptorTransition({
-        existing: { scheme: 'edv' },
+        stored: { encryption: { scheme: 'edv' } },
         incoming: { scheme: 'edv' }
       })
     )
@@ -544,7 +552,9 @@ describe('assertEncryptionDescriptorTransition (scheme version)', () => {
     throwsImmutablePointer(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: { scheme: 'edv', version: 2 } as CollectionEncryption,
+          stored: {
+            encryption: { scheme: 'edv', version: 2 } as CollectionEncryption
+          },
           incoming: { scheme: 'edv', version: 1 } as CollectionEncryption
         }),
       '#/encryption/version'
@@ -554,7 +564,9 @@ describe('assertEncryptionDescriptorTransition (scheme version)', () => {
     throwsImmutablePointer(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: { scheme: 'edv', version: 1 } as CollectionEncryption,
+          stored: {
+            encryption: { scheme: 'edv', version: 1 } as CollectionEncryption
+          },
           incoming: { scheme: 'edv' }
         }),
       '#/encryption/version'
@@ -643,18 +655,28 @@ describe('assertEncryptionEpochsTransition', () => {
 })
 
 describe('assertEncryptionDescriptorTransition', () => {
-  it('is a no-op when nothing is persisted yet (incoming defined)', () => {
+  it('throws EncryptionImmutableError (409) adding a descriptor to a Collection that has none', () => {
+    throwsImmutablePointer(
+      () =>
+        assertEncryptionDescriptorTransition({
+          stored: {},
+          incoming: epochDescriptor()
+        }),
+      '#/encryption'
+    )
+  })
+  it('is a no-op for a create (no stored Collection), whatever it declares', () => {
     assert.doesNotThrow(() =>
       assertEncryptionDescriptorTransition({
-        existing: undefined,
+        stored: undefined,
         incoming: epochDescriptor()
       })
     )
   })
-  it('is a no-op when nothing is persisted yet (incoming also undefined)', () => {
+  it('is a no-op when a Collection with no descriptor stays without one', () => {
     assert.doesNotThrow(() =>
       assertEncryptionDescriptorTransition({
-        existing: undefined,
+        stored: {},
         incoming: undefined
       })
     )
@@ -664,7 +686,7 @@ describe('assertEncryptionDescriptorTransition', () => {
     assert.throws(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: { scheme: 'edv' },
+          stored: { encryption: { scheme: 'edv' } },
           incoming: undefined
         }),
       EncryptionImmutableError
@@ -674,7 +696,7 @@ describe('assertEncryptionDescriptorTransition', () => {
     assert.throws(
       () =>
         assertEncryptionDescriptorTransition({
-          existing: { scheme: 'edv' },
+          stored: { encryption: { scheme: 'edv' } },
           incoming: { scheme: 'other' } as unknown as CollectionEncryption
         }),
       EncryptionImmutableError
@@ -688,7 +710,11 @@ describe('assertEncryptionDescriptorTransition', () => {
       epochs: [existing.epochs![0]!]
     }
     assert.throws(
-      () => assertEncryptionDescriptorTransition({ existing, incoming }),
+      () =>
+        assertEncryptionDescriptorTransition({
+          stored: { encryption: existing },
+          incoming
+        }),
       InvalidRequestBodyError
     )
   })
@@ -703,7 +729,10 @@ describe('assertEncryptionDescriptorTransition', () => {
       ]
     }
     assert.doesNotThrow(() =>
-      assertEncryptionDescriptorTransition({ existing, incoming })
+      assertEncryptionDescriptorTransition({
+        stored: { encryption: existing },
+        incoming
+      })
     )
   })
 })
