@@ -61,11 +61,11 @@ or a URL beneath it. That is the `replicas-subtree` container rule (see
 delegated grant on the Space URL, the shape of an app's data grant, reaches the
 routes by attenuation and is refused with the masked `not-found`. Admitted, it
 would list the Space's pull capabilities, pause its loops and remove its
-registrations. The reads demand the auth headers, so an anonymous read is 401
-and no access-control policy serves one. On a promoted replica Space, whose
-controller is an account `did:webvh`, the client-annex clause admits a
-ladder-signed grant on the Space's replicas URL under the Space's root, with no
-pointer gate (see
+registrations. The reads verify a capability and consult no access-control
+policy, so an anonymous read is the masked `not-found` (404). On a promoted
+replica Space, whose controller is an account `did:webvh`, the client-annex
+clause admits a ladder-signed grant on the Space's replicas URL under the
+Space's root, with no pointer gate (see
 [client-annex-clause.md](client-annex-clause.md#shape-7-a-maintenance-grant-on-the-replicas-route)).
 
 The delegated path carries two bounds. The first is on a create. A create under

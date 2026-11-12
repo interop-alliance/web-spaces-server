@@ -15,11 +15,7 @@
  *   policy resource.
  */
 import type { FastifyRequest } from 'fastify'
-import {
-  capabilityActionOf,
-  verifiedInvocation,
-  verifyRequestZcap
-} from '../zcap.js'
+import { verifiedInvocation, verifyRequestZcap } from '../zcap.js'
 import type { VerifiedInvocation } from '../zcap.js'
 import type { ContainerRule } from '../lib/containerRule.js'
 import { authorize } from '../authorize.js'
@@ -287,7 +283,6 @@ export async function fetchSpaceAndVerify({
     request,
     peerWebvh: true,
     allowedTarget: context.allowedTarget,
-    allowedAction: capabilityActionOf({ method: request.method }),
     spaceController: context.spaceMetadata.controller,
     requestName,
     attenuatedRootTarget: context.spaceRootTarget,

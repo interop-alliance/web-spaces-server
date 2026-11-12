@@ -1416,9 +1416,9 @@ export interface StorageBackend {
    * precondition is evaluated on the log's current `ETag` atomically with the
    * write (`precondition-failed`, 412, on a mismatch). Resolves `undefined`
    * when the Collection does not exist (this operation never creates one). A
-   * `body` equal to the stored log, byte for byte, is a no-op once the
-   * precondition passes: the current validator is resolved, `assertTransition`
-   * is not invoked, and nothing is written.
+   * `body` equal to the stored log, byte for byte, is refused once the
+   * precondition passes (`invalid-request-body`, 400): `assertTransition` is
+   * not invoked, and nothing is written.
    *
    * The write mints the log's own stamp, and also advances the Collection
    * Metadata object's local validator segment without minting a stamp for it:
@@ -2403,9 +2403,9 @@ declare module 'fastify' {
      */
     provisioningPolicyConsulted?: boolean
     /**
-     * Set by the `parseAuthHeaders` hook when auth headers are present. Absent
-     * for anonymous reads (the `requireAuthHeaders` hook lets safe methods
-     * through without auth so a fallback policy can grant access).
+     * Set by the `parseAuthHeaders` hook when an `Authorization` header is
+     * present. Absent for an anonymous request, which a fallback policy may
+     * grant when it is a read.
      */
     zcap?: ParsedZcap
     /**

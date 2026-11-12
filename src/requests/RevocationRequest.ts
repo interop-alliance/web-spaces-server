@@ -22,6 +22,7 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import {
+  assertInvocationPresent,
   capabilityActionOf,
   handleRevocationInvocationVerify,
   ROOT_PREFIX,
@@ -188,6 +189,10 @@ async function submitRevocation({
 }): Promise<void> {
   const { url, method, headers, body } = request
   const { serverUrl, storage, serverBackends } = request.server
+
+  // A request with no capability invocation is refused before the submitted
+  // chain is verified, so it costs no proof verification and no log read.
+  assertInvocationPresent({ headers, requestName })
 
   // Validate the body capability and verify its own delegation chain, holding
   // any failure back until the invocation has verified: a 400 raised here

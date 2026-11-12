@@ -6,7 +6,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Readable } from 'node:stream'
 import { v4 as uuidv4 } from 'uuid'
-import { verifyRequestZcap } from '../zcap.js'
+import { assertInvocationPresent, verifyRequestZcap } from '../zcap.js'
 import { SPACE_METADATA_WRITE_ATTEMPTS } from '../config.default.js'
 import { buildLinkset } from '../policy.js'
 import {
@@ -997,6 +997,20 @@ async function authorizeAndWriteSpaceMetadata({
       containerRule: 'controller-only'
     })
   } else {
+    // The gate decided from its own earlier read of the Space. If it saw one
+    // that has since been deleted, it let this request through as an update
+    // without consulting the provisioning policy, so consult it now (a no-op
+    // when the gate already did).
+    await consultProvisioningPolicy(request)
+    // A request with no capability invocation is refused here, ahead of the
+    // create-only checks below, unless the provisioning policy vouched for
+    // it. Their 4xx would otherwise tell an absent Space from an existing
+    // one, which answers such a request the masked `not-found`. No request
+    // name is passed, as on the update branch, so the two bodies are the same
+    // bytes.
+    if (!request.provisioningAuthorized) {
+      assertInvocationPresent({ headers: request.headers })
+    }
     // Creation stays `did:key`-only, as on Create Space: the `did:webvh`
     // shape the pre-check above admits is a controller a Space may be
     // updated to, not one it may be created with.
@@ -1008,11 +1022,6 @@ async function authorizeAndWriteSpaceMetadata({
     assertClientCreatableSpaceType(requestedType, {
       requestName: 'Update Space'
     })
-    // The gate decided from its own earlier read of the Space. If it saw one
-    // that has since been deleted, it let this request through as an update
-    // without consulting the provisioning policy, so consult it now (a no-op
-    // when the gate already did).
-    await consultProvisioningPolicy(request)
     // Skipped when the provisioning policy already vouched for the create
     // (e.g. a valid onboarding token), as on Create Space via POST.
     if (!request.provisioningAuthorized) {

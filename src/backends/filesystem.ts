@@ -4493,7 +4493,7 @@ export class FileSystemBackend implements StorageBackend {
                 spaceId,
                 collectionId
               })
-              const { validator, changed } = await mintCollectionLogWrite({
+              const validator = await mintCollectionLogWrite({
                 collectionId,
                 collectionMetadata,
                 prior,
@@ -4503,9 +4503,6 @@ export class FileSystemBackend implements StorageBackend {
                 assertTransition,
                 clock: this.#clock
               })
-              if (!changed) {
-                return validator
-              }
               const { generation, stamp } = validator
               await this.#persistCollectionLog({
                 spaceId,

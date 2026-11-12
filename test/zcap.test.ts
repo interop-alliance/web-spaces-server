@@ -81,7 +81,10 @@ describe('handleZcapVerify', () => {
       await handleZcapVerify({
         ...baseArgs,
         serverUrl: 'not-a-valid-url',
-        headers: {},
+        headers: {
+          authorization: 'Signature keyId="did:key:z6MkExample#z6MkExample"',
+          'capability-invocation': 'zcap id="urn:zcap:root:example"'
+        },
         requestName: 'Read Space',
         logger,
         revocation: 'no-revocation-scope'

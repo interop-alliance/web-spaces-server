@@ -16,7 +16,7 @@
  * delegator uses. It is not the whole answer for Delete Space: the
  * client-annex clause adds two signer-keyed bounds on top of it (below).
  *
- * Four rules, spread over eleven protected operations:
+ * Four rules, spread over twelve protected operations:
  *
  * - `controller-only` -- only a direct root-capability invocation passes. A
  *   delegated capability is refused whatever its `allowedAction`. Used by
@@ -38,8 +38,10 @@
  *   whose tail targets exactly the Space's canonical trailing-slash URL (the
  *   shape a wallet's generation delegation carries). The library already
  *   checks that the action covers the invoked verb. A capability targeting the
- *   Collection container URL, the log URL, or a Resource URL is refused. Used
- *   by `PUT /space/<S>/<C>/meta/log`, the guarded create of the Collection's
+ *   Collection container URL, the Metadata or log URL, or a Resource URL is
+ *   refused. Used by `PUT /space/<S>/<C>/meta`, which writes the Collection's
+ *   configuration and creates the Collection when absent, and by
+ *   `PUT /space/<S>/<C>/meta/log`, the guarded create of the Collection's
  *   governing history log (which from then on derives the Collection's served
  *   `encryption` descriptor, and refuses every direct `encryption` write).
  * - `replicas-subtree` -- a direct root invocation, or a delegated capability
@@ -51,15 +53,11 @@
  *   grant out and admits the maintenance grant the client-annex clause's
  *   seventh shape describes, whose target is the replicas URL itself.
  *
- * `PUT /space/<S>/<C>/meta` carries no rule. It once carried
- * `space-subtree-put`, which refused the Collection-scoped grant an app holds
- * (a wallet delegates one Collection, not the Space), and so refused the
- * app's own index and encryption declarations on that Collection. The prefix
- * hazard is weak there: a holder of a Collection data grant already writes and
- * deletes every Resource in it, the `encryption` descriptor is immutable once
- * set, and Delete Collection stays controller-only. So every tail the
- * library's attenuation admits -- the Space subtree, the Collection container
- * URL, or the Metadata URL itself -- writes the Metadata object.
+ * Create Collection (`POST /space/<S>/`) carries no rule: it stays
+ * exact-target delegable. An app holding a Collection-scoped grant (a wallet
+ * delegates one Collection, not the Space) does not write that Collection's
+ * Metadata object. Its index and `encryption` declarations are written by the
+ * controller, or under a grant on the Space URL.
  *
  * The tail alone is read, not every link. A wallet mints a DELETE-only child
  * of a two-verb management parent and invokes the child; that shape stays
@@ -165,8 +163,9 @@ export function containerRuleInspector({
     return {
       valid: false,
       error: new Error(
-        'Writing a Collection history log accepts a delegated capability ' +
-          "only when the invoked capability's invocationTarget is exactly " +
+        'Writing a Collection Metadata object or its history log accepts ' +
+          "a delegated capability only when the invoked capability's " +
+          'invocationTarget is exactly ' +
           "the Space's canonical trailing-slash URL (its items subtree)."
       )
     }

@@ -60,10 +60,11 @@ describe('Masked denials are indistinguishable', () => {
       method: 'POST',
       json: { id: collectionId, name: 'Credentials' }
     })
+    // By `PUT`, since Create Resource (`POST`) mints the id itself.
     await alice.pws.request({
-      url: `${baseServerUrl}space/${spaceId}/${collectionId}/`,
-      method: 'POST',
-      json: { id: resourceId, name: 'A document' }
+      url: `${baseServerUrl}space/${spaceId}/${collectionId}/${resourceId}`,
+      method: 'PUT',
+      json: { name: 'A document' }
     })
     const keystore = await KmsClient.createKeystore({
       url: `${baseServerUrl}kms/keystores`,
@@ -83,16 +84,27 @@ describe('Masked denials are indistinguishable', () => {
    * @param options {object}
    * @param options.url {string}   the absolute URL to request
    * @param [options.method] {string}   the HTTP method (default `GET`)
+   * @param [options.json] {object}   a JSON request body
    * @returns {Promise<Probe>}
    */
   async function anonymous({
     url,
-    method = 'GET'
+    method = 'GET',
+    json
   }: {
     url: string
     method?: string
+    json?: object
   }): Promise<Probe> {
-    const response = await fetch(url, { method })
+    const response = await fetch(url, {
+      method,
+      ...(json
+        ? {
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(json)
+          }
+        : {})
+    })
     return {
       status: response.status,
       contentType: response.headers.get('content-type'),
@@ -252,6 +264,216 @@ describe('Masked denials are indistinguishable', () => {
       // already knows, having chosen the URL -- and nothing about what was or
       // was not stored there.
       assert.equal(problem.title, 'Invalid Get Resource request')
+    })
+  })
+
+  describe('a request with no authorization headers beneath /space/', () => {
+    // Each case names one operation at an existing target and at an absent
+    // one. `json` is a body that passes the operation's shape checks, so no
+    // request validation answers ahead of authorization.
+    const cases = () => {
+      const absentSpace = `${baseServerUrl}space/no-such-space-${crypto.randomUUID()}`
+      const space = `${baseServerUrl}space/${spaceId}`
+      const collection = `${space}/${collectionId}`
+      const absentCollection = `${space}/no-such-collection`
+      return [
+        {
+          what: 'Create Collection',
+          method: 'POST',
+          existing: `${space}/`,
+          absent: `${absentSpace}/`,
+          json: { name: 'Anonymous' }
+        },
+        {
+          what: 'Delete Space',
+          method: 'DELETE',
+          existing: `${space}/`,
+          absent: `${absentSpace}/`
+        },
+        {
+          what: 'Update Collection',
+          method: 'PUT',
+          existing: `${collection}/meta`,
+          absent: `${absentSpace}/${collectionId}/meta`,
+          json: { name: 'Anonymous' }
+        },
+        {
+          what: 'Delete Collection',
+          method: 'DELETE',
+          existing: `${collection}/`,
+          absent: `${absentCollection}/`
+        },
+        {
+          what: 'Create Resource',
+          method: 'POST',
+          existing: `${collection}/`,
+          absent: `${absentCollection}/`,
+          json: { name: 'Anonymous' }
+        },
+        {
+          what: 'Write Resource',
+          method: 'PUT',
+          existing: `${collection}/${resourceId}`,
+          absent: `${collection}/no-such-doc`,
+          json: { name: 'Anonymous' }
+        },
+        {
+          what: 'Delete Resource',
+          method: 'DELETE',
+          existing: `${collection}/${resourceId}`,
+          absent: `${collection}/no-such-doc`
+        },
+        {
+          what: 'Get Policy (Space)',
+          method: 'GET',
+          existing: `${space}/policy`,
+          absent: `${absentSpace}/policy`
+        },
+        {
+          what: 'Get Policy (Collection)',
+          method: 'GET',
+          existing: `${collection}/policy`,
+          absent: `${absentCollection}/policy`
+        },
+        {
+          what: 'Delete Policy (Collection)',
+          method: 'DELETE',
+          existing: `${collection}/policy`,
+          absent: `${absentCollection}/policy`
+        },
+        {
+          what: 'List Replicas',
+          method: 'GET',
+          existing: `${space}/replicas`,
+          absent: `${absentSpace}/replicas`
+        },
+        {
+          what: 'Get Replica',
+          method: 'GET',
+          existing: `${space}/replicas/peer`,
+          absent: `${absentSpace}/replicas/peer`
+        },
+        {
+          what: 'Export Space',
+          method: 'POST',
+          existing: `${space}/export`,
+          absent: `${absentSpace}/export`
+        }
+      ]
+    }
+
+    it('answers the masked 404, the same at an existing and an absent target', async () => {
+      for (const { what, method, existing, absent, json } of cases()) {
+        assertIndistinguishable({
+          absent: await anonymous({ url: absent, method, json }),
+          denied: await anonymous({ url: existing, method, json }),
+          what: `${what} (anonymous)`,
+          status: 404
+        })
+      }
+    })
+
+    it('answers the same bytes an under-authorized signed request gets', async () => {
+      for (const { what, method, existing, json } of cases()) {
+        assertIndistinguishable({
+          absent: await unverifiable({ url: existing, method, json }),
+          denied: await anonymous({ url: existing, method, json }),
+          what: `${what} (anonymous versus signed)`,
+          status: 404
+        })
+      }
+    })
+
+    it('Update Space answers the masked 404 at an existing and an absent Space', async () => {
+      const json = { controller: alice.did }
+      assertIndistinguishable({
+        absent: await anonymous({
+          url: `${baseServerUrl}space/no-such-space-${crypto.randomUUID()}/meta`,
+          method: 'PUT',
+          json
+        }),
+        denied: await anonymous({
+          url: `${baseServerUrl}space/${spaceId}/meta`,
+          method: 'PUT',
+          json
+        }),
+        what: 'Update Space (anonymous)',
+        status: 404
+      })
+    })
+
+    it('Update Space answers no create-only refusal to an anonymous request', async () => {
+      // Each body passes the shape checks and fails a check only the create
+      // branch runs, so an absent Space must not answer its 4xx.
+      const bodies = [
+        {
+          controller: alice.did,
+          type: ['AuxiliarySpace', 'ServerInstanceSpace', 'Space']
+        }
+      ]
+      for (const json of bodies) {
+        assertIndistinguishable({
+          absent: await anonymous({
+            url: `${baseServerUrl}space/no-such-space-${crypto.randomUUID()}/meta`,
+            method: 'PUT',
+            json
+          }),
+          denied: await anonymous({
+            url: `${baseServerUrl}space/${spaceId}/meta`,
+            method: 'PUT',
+            json
+          }),
+          what: 'Update Space (anonymous, create-only refusal)',
+          status: 404
+        })
+      }
+      assertIndistinguishable({
+        absent: await anonymous({
+          url: `${baseServerUrl}space/server/meta`,
+          method: 'PUT',
+          json: { controller: alice.did }
+        }),
+        denied: await anonymous({
+          url: `${baseServerUrl}space/${spaceId}/meta`,
+          method: 'PUT',
+          json: { controller: alice.did }
+        }),
+        what: 'Update Space (anonymous, reserved id)',
+        status: 404
+      })
+    })
+
+    it('nothing was written', async () => {
+      const read = await alice.pws.request({
+        url: `${baseServerUrl}space/${spaceId}/${collectionId}/${resourceId}`,
+        method: 'GET'
+      })
+      assert.equal(read.status, 200)
+      assert.equal(read.data.name, 'A document')
+    })
+
+    it('Create Space at the Spaces Repository stays missing-authorization (401)', async () => {
+      const probe = await anonymous({
+        url: `${baseServerUrl}spaces/`,
+        method: 'POST',
+        json: { controller: alice.did }
+      })
+      assert.equal(probe.status, 401)
+      assert.equal(
+        JSON.parse(probe.text).type,
+        'https://w3id.org/pws#missing-authorization'
+      )
+    })
+
+    it('the /kms group stays missing-authorization (401)', async () => {
+      for (const method of ['GET', 'POST']) {
+        const probe = await anonymous({
+          url: `${baseServerUrl}kms/keystores/${keystoreId}`,
+          method,
+          ...(method === 'POST' ? { json: { sequence: 1 } } : {})
+        })
+        assert.equal(probe.status, 401, method)
+      }
     })
   })
 

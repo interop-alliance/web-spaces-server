@@ -242,14 +242,14 @@ describe('Replication between two servers', () => {
       assert.equal(again.json().type, ProblemTypes.ID_CONFLICT)
     })
 
-    it('demands the auth headers on every read', async () => {
+    it('answers an anonymous read as the masked not-found', async () => {
       for (const path of [
         '/space/reg-dst/replicas',
         '/space/reg-dst/replicas/peer',
         '/space/reg-dst/replicas/peer/status'
       ]) {
         const anonymous = await replica.fastify.inject({ url: path })
-        assert.equal(anonymous.statusCode, 401, path)
+        assert.equal(anonymous.statusCode, 404, path)
       }
     })
 

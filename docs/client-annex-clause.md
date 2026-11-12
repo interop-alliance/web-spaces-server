@@ -351,6 +351,14 @@ synthesized root alone, so a direct root invocation always passes.
   [governed-logs-and-revisions.md](governed-logs-and-revisions.md)). A tail
   aimed at the Collection container URL, at the log URL, or at a Resource stays
   refused there.
+- `PUT /space/<S>/<C>/meta` accepts the same tail, one targeting exactly the
+  Space's canonical trailing-slash URL. A tail aimed at the Collection container
+  URL, at the Metadata URL itself, or at a Resource is refused. The write
+  replaces the Collection's configuration and creates the Collection when
+  absent, so a Collection data grant does not reach it. An app that holds a
+  Collection-scoped grant does not declare its own indexes or `encryption`
+  through this write. The controller writes them, or the app holds a grant on
+  the Space URL.
 
 ### The replicas routes
 
@@ -367,14 +375,6 @@ invocation may do there are the route's (see
 [replication.md](replication.md#authorization)).
 
 ### Operations outside the rule
-
-`PUT /space/<S>/<C>/meta` carries no rule. A tail on the Space subtree, on the
-Collection container URL, or on the Metadata URL itself writes the object. An
-app holds a Collection-scoped grant, not a Space-subtree one, and declares its
-own indexes and `encryption` on that Collection through this write. The prefix
-hazard is weak there. A holder of a Collection data grant already writes and
-deletes every Resource in it, the `encryption` descriptor is immutable once set,
-and Delete Collection stays controller-only.
 
 Create Collection (`POST /space/<S>/`) is outside the rule.
 

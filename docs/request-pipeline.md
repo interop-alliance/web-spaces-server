@@ -11,10 +11,17 @@ glossary.
 
 `src/routes.ts` has four `init*Routes(app)` functions that map URL patterns to
 handler methods. Every group installs the same hook chain first: the
-`requireAuthHeadersOrPublicRead` then `parseAuthHeaders` `onRequest` hooks, then
-the `captureRawBody` (preParsing) and `verifyBodyDigest` (preValidation) digest
-hooks. The digest hooks are described in
-[Request body integrity](#request-body-integrity).
+`parseAuthHeaders` `onRequest` hook, then the `captureRawBody` (preParsing) and
+`verifyBodyDigest` (preValidation) digest hooks. The digest hooks are described
+in [Request body integrity](#request-body-integrity).
+
+Two groups install an auth-header requirement ahead of `parseAuthHeaders`. The
+`/spaces/` repository group installs `requireAuthHeadersOrPublicRead`, so a
+Create Space with no auth headers is `missing-authorization` (401), and an
+anonymous List Spaces proceeds to its empty-items 200. The `/kms` group installs
+`requireAuthHeaders`, so every request there with no auth headers is a 401. The
+three groups beneath `/space/` install neither. See
+[A request with no authorization headers](#a-request-with-no-authorization-headers).
 
 `src/zcap.ts` holds `handleZcapVerify()`, which performs the
 capability-invocation signature verification against the Space controller's key.
@@ -80,9 +87,9 @@ answering, their 405 refusals included.
 A refusal and a slash redirect answer the same whatever the caller's identity.
 Both carry the `noAuth` route config, and the group's auth-header,
 `parseAuthHeaders` and digest hooks skip them. An anonymous `PUT` of a container
-URL is therefore a 405, not a 401. A refusal is thrown from a route-level
-`onRequest` hook, ahead of body parsing. The provisioning gate, the error
-handler, the `no-store` marking and the
+URL is therefore a 405, whether or not the container exists. A refusal is thrown
+from a route-level `onRequest` hook, ahead of body parsing. The provisioning
+gate, the error handler, the `no-store` marking and the
 [hosted-page sandbox](#the-hosted-page-sandbox) still run on them. The
 `no-store` marking is described in
 [validators-and-stamps.md](validators-and-stamps.md).
@@ -269,3 +276,27 @@ resolving it is part of authorization, not request parsing.
 Revocation submission's body-shape and chain-verification checks, and Create
 Space's `id-conflict` existence check, run only after the invocation verifies.
 Their 400s cannot be used to probe whether a scope or a Space id exists.
+
+### A request with no authorization headers
+
+A request beneath `/space/:spaceId` that carries no `Authorization` or no
+`Capability-Invocation` header reaches its handler. A read may be granted by an
+access-control policy. Anything else is refused by the handler's authorization
+as the masked `not-found` (404), whether or not the target exists. That covers
+every unsafe method, and the reads no policy serves: Get Policy at all three
+levels and the replicas reads.
+
+The refusal is raised where every capability verification starts
+(`assertInvocationPresent` in `src/zcap.ts`), under the handler's own request
+name. The body is therefore the same bytes an under-authorized signed request
+gets at that URL. A handler's body-shape checks that run ahead of authorization
+answer their 400 first, for an existing and an absent target alike. A handler
+that runs target-dependent checks ahead of its verification calls
+`assertInvocationPresent` before them. Create Space by Id does so ahead of its
+create-only checks, and revocation submission ahead of verifying the submitted
+chain.
+
+Two answers stay `missing-authorization` (401). Create Space at the Spaces
+Repository keeps it, since the repository's existence is not sensitive. The
+`/kms` group keeps it on every route: it is the WebKMS protocol, and the 401 is
+the same for an existing and an absent keystore.

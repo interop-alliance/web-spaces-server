@@ -153,38 +153,14 @@ export function collectionLogResultOf(
 }
 
 /**
- * The validator a log write answers with when its body equals the stored log
- * byte for byte, or `undefined` when the write changes something. A re-sent
- * log is a no-op once its preconditions pass: the current validator is
- * returned, the transition checks are skipped, and neither the log nor the
- * Collection Metadata object moves. Both backends decide it here.
- * @param options {object}
- * @param [options.prior] {StoredCollectionLog}   the stored log, if any
- * @param options.body {string}   the new log body
- * @returns {EtagValidator | undefined}
- */
-export function unchangedLogValidator({
-  prior,
-  body
-}: {
-  prior?: StoredCollectionLog
-  body: string
-}): EtagValidator | undefined {
-  if (prior === undefined || prior.body !== body) {
-    return undefined
-  }
-  return collectionLogResultOf(prior).validator
-}
-
-/**
  * The backend-agnostic body of `writeCollectionLog`, run inside the backend's
  * critical section against the stored log and the live Collection Metadata
  * object it read there. In order: the precondition against the stored log's
- * `ETag`, the no-op check ({@link unchangedLogValidator}), the caller's
+ * `ETag`, the refusal of a body equal to the stored log, the caller's
  * transition check, and the new validator's mint. A re-sent log whose
- * preconditions pass resolves the current validator with `changed: false`,
- * and the backend stores nothing. Otherwise the backend stores the log under
- * the minted validator.
+ * preconditions pass extends the stored bytes by no line, so it is refused
+ * with `invalid-request-body` (400) and the backend stores nothing. Otherwise
+ * the backend stores the log under the minted validator.
  * @param options {object}
  * @param options.collectionId {string}   for the error detail
  * @param options.collectionMetadata {StoredCollectionMetadata}   the live
@@ -196,7 +172,7 @@ export function unchangedLogValidator({
  * @param [options.assertTransition] {Function}   run against the prior log
  *   and the Collection Metadata object; throwing aborts the write
  * @param options.clock {HybridLogicalClock}   the store's clock
- * @returns {Promise<{ validator: EtagValidator, changed: boolean }>}
+ * @returns {Promise<EtagValidator>}
  */
 export async function mintCollectionLogWrite({
   collectionId,
@@ -219,23 +195,26 @@ export async function mintCollectionLogWrite({
     collectionMetadata: StoredCollectionMetadata
   }) => void | Promise<void>
   clock: HybridLogicalClock
-}): Promise<{ validator: EtagValidator; changed: boolean }> {
+}): Promise<EtagValidator> {
   assertCollectionLogWritePrecondition({
     collectionId,
     currentEtag: prior && etagOf(prior),
     ifMatch,
     ifNoneMatch
   })
-  const unchanged = unchangedLogValidator({ prior, body })
-  if (unchanged !== undefined) {
-    return { validator: unchanged, changed: false }
+  if (prior?.body === body) {
+    throw new InvalidRequestBodyError({
+      requestName: 'Write Collection History Log',
+      detail:
+        'The body equals the stored history log: an append carries the ' +
+        'stored bytes verbatim followed by one new line.'
+    })
   }
   await assertTransition?.({
     prior: prior && collectionLogResultOf(prior),
     collectionMetadata
   })
-  const validator = await mintValidator({ clock, prior })
-  return { validator, changed: true }
+  return mintValidator({ clock, prior })
 }
 
 /**

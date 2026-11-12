@@ -767,7 +767,7 @@ describe('Collection changes query profile', () => {
       assert.equal(doc.etag, await etagOf(picUrl))
     })
 
-    it('a governed log takes a position on its guarded create and each append, and none on a no-op', async () => {
+    it('a governed log takes a position on its guarded create and each append, and none on a refused re-send', async () => {
       await seedCollection('kinds-log', [])
       const { data: start } = await queryChanges(alice, 'kinds-log', {
         limit: 10
@@ -851,11 +851,16 @@ describe('Collection changes query profile', () => {
       assert.equal(appendDoc.generation, logDoc.generation)
       assert.equal(positionOf(appendDoc.checkpoint), 3)
 
-      // A byte-identical PUT is a no-op and takes no position.
-      const unchangedEtag = await putLog('kinds-log', extended, {
-        'if-match': appendedEtag
-      })
-      assert.equal(unchangedEtag, appendedEtag)
+      // A byte-identical PUT is refused and takes no position.
+      const resent = await alice.pws
+        .request({
+          url: logUrl('kinds-log'),
+          method: 'PUT',
+          body: new TextEncoder().encode(extended),
+          headers: { 'content-type': 'text/jsonl', 'if-match': appendedEtag }
+        })
+        .catch(err => err.response as Response)
+      assert.equal(resent.status, 400)
       const { data: idle } = await queryChanges(alice, 'kinds-log', {
         limit: 10,
         checkpoint: appended.checkpoint

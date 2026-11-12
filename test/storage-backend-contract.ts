@@ -5501,13 +5501,16 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           ['log']
         )
 
-        // A byte-identical log write writes nothing and moves nothing.
-        await backend.writeCollectionLog({
-          spaceId,
-          collectionId,
-          body: logLine1 + logLine2,
-          ifMatch: formatEtag(appended!)
-        })
+        // A byte-identical log write is refused and moves nothing.
+        await assert.rejects(
+          backend.writeCollectionLog({
+            spaceId,
+            collectionId,
+            body: logLine1 + logLine2,
+            ifMatch: formatEtag(appended!)
+          }),
+          (err: unknown) => err instanceof InvalidRequestBodyError
+        )
         const afterNoop = await feedOf({
           collectionId,
           afterPosition: afterAppend.checkpoint!

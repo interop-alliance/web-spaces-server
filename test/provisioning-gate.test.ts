@@ -326,9 +326,9 @@ describe('Provisioning gate', () => {
         token: TOKEN,
         body: { ...createSpaceBody(spaceId), name: 'Hijack' }
       })
-      // An existing Space is not gated, so the Bearer header reaches the
-      // capability-invocation path and fails there.
-      assert.equal(response.status, 401)
+      // An existing Space is not gated, so the Bearer header reaches
+      // `parseAuthHeaders`, which cannot parse it as an HTTP Signature.
+      assert.equal(response.status, 400)
       const stored = await backend.getSpaceMetadata({ spaceId })
       assert.equal(stored?.name, undefined)
     })

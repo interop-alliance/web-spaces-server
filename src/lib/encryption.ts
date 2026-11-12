@@ -579,15 +579,12 @@ export function assertEncryptionDescriptorTransition({
     return
   }
   const existing = stored.encryption
-  if (incoming === undefined) {
-    if (existing === undefined) {
-      // A Collection without a descriptor stays without one.
-      return
-    }
-    throw new EncryptionImmutableError()
+  if (incoming === undefined && existing === undefined) {
+    // A Collection without a descriptor stays without one.
+    return
   }
-  if (existing === undefined) {
-    // Creation-only: an existing Collection without a descriptor takes none.
+  if (incoming === undefined || existing === undefined) {
+    // Creation-only: an update neither clears a descriptor nor adds one.
     throw new EncryptionImmutableError()
   }
   assertEncryptionTransition({ existing, incoming })

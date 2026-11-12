@@ -33,33 +33,36 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   Neither is exported from the package.
 - **`src/routes.ts`** -- four `init*Routes(app)` functions map URL patterns to
   handler methods. Every group installs the same hook chain first: the
-  `requireAuthHeadersOrPublicRead` then `parseAuthHeaders` `onRequest` hooks,
-  then the `captureRawBody` (preParsing) and `verifyBodyDigest` (preValidation)
-  digest hooks. A container (a Space or a Collection) is canonically addressed
-  with a trailing slash: `GET` lists its members, `POST` adds one, `DELETE`
-  removes the container, and `PUT` is not defined there. What a container _is_
-  lives at its `meta` sub-resource: `GET`/`PUT /space/:spaceId/meta` is the
-  Space Metadata object and `GET`/`PUT /space/:spaceId/:collectionId/meta` the
-  Collection Metadata object. Every URL a group registers answers 405 for each
-  method it does not implement, with an `Allow` header naming the methods it
-  does. The refusals are derived from the router: each group records its route
-  URLs with an `onRoute` hook (`collectRouteUrls`) and ends with
-  `refuseUnimplementedMethods`, which must stay last in its group. The only
-  hand-written input is the `PUT`/`DELETE` hints and the two anchors a Space
-  does not serve (`/space/:spaceId/query` and `/space/:spaceId/meta/log`). The
-  405 has no problem `type` (RFC 9457 `about:blank`, title
-  `Method Not Allowed`). A path beneath a reserved segment that no route serves
-  is a 404: `refusePathsBeneath` registers a `<segment>/*` wildcard for each id
-  in the reserved-id registry (`lib/validateId.ts`), answered through
-  `reply.callNotFound()`. The no-slash form of a container URL, and the slash
-  form of a Resource or chunk URL, redirect to the canonical form with a 308 for
-  every method the canonical form implements, so a signed request must be
-  re-signed for the redirect target. A refusal and a redirect carry the `noAuth`
-  route config: the auth-header, `parseAuthHeaders` and digest hooks skip them,
-  and they answer the same whether or not the target exists and whatever the
-  caller's identity. `OPTIONS` is left to the CORS preflight, and `HEAD` follows
-  `GET`. The full rules of the refusals, the reserved paths and the redirects
-  are in [docs/request-pipeline.md](docs/request-pipeline.md).
+  `parseAuthHeaders` `onRequest` hook, then the `captureRawBody` (preParsing)
+  and `verifyBodyDigest` (preValidation) digest hooks. The groups beneath
+  `/space/` install no auth-header requirement: a request with no auth headers
+  reaches its handler, whose authorization answers the masked `not-found` (404).
+  The `/spaces/` repository group answers an unsafe method with no auth headers
+  `missing-authorization` (401), and the `/kms` group every method. A container
+  (a Space or a Collection) is canonically addressed with a trailing slash:
+  `GET` lists its members, `POST` adds one, `DELETE` removes the container, and
+  `PUT` is not defined there. What a container _is_ lives at its `meta`
+  sub-resource: `GET`/`PUT /space/:spaceId/meta` is the Space Metadata object
+  and `GET`/`PUT /space/:spaceId/:collectionId/meta` the Collection Metadata
+  object. Every URL a group registers answers 405 for each method it does not
+  implement, with an `Allow` header naming the methods it does. The refusals are
+  derived from the router: each group records its route URLs with an `onRoute`
+  hook (`collectRouteUrls`) and ends with `refuseUnimplementedMethods`, which
+  must stay last in its group. The only hand-written input is the `PUT`/`DELETE`
+  hints and the two anchors a Space does not serve (`/space/:spaceId/query` and
+  `/space/:spaceId/meta/log`). The 405 has no problem `type` (RFC 9457
+  `about:blank`, title `Method Not Allowed`). A path beneath a reserved segment
+  that no route serves is a 404: `refusePathsBeneath` registers a `<segment>/*`
+  wildcard for each id in the reserved-id registry (`lib/validateId.ts`),
+  answered through `reply.callNotFound()`. The no-slash form of a container URL,
+  and the slash form of a Resource or chunk URL, redirect to the canonical form
+  with a 308 for every method the canonical form implements, so a signed request
+  must be re-signed for the redirect target. A refusal and a redirect carry the
+  `noAuth` route config: the auth-header, `parseAuthHeaders` and digest hooks
+  skip them, and they answer the same whether or not the target exists and
+  whatever the caller's identity. `OPTIONS` is left to the CORS preflight, and
+  `HEAD` follows `GET`. The full rules of the refusals, the reserved paths and
+  the redirects are in [docs/request-pipeline.md](docs/request-pipeline.md).
 - **`src/requests/*Request.ts`** -- request handlers as static class methods
   (`SpaceRequest.post`, etc.). Each handler follows the same shape: fetch the
   Space/Collection for context, call `handleZcapVerify(...)`, then call a
@@ -73,9 +76,10 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   and body rules of each write are in
   [docs/validators-and-stamps.md](docs/validators-and-stamps.md) under "Write
   responses".
-- **`src/auth-header-hooks.ts`** -- `requireAuthHeaders` (401 if missing) and
-  `parseAuthHeaders` (parses `Authorization` / `Capability-Invocation` /
-  `Digest` into `request.zcap`).
+- **`src/auth-header-hooks.ts`** -- `requireAuthHeaders` (401 if missing, the
+  `/kms` group), `requireAuthHeadersOrPublicRead` (the same for unsafe methods,
+  the `/spaces/` repository group) and `parseAuthHeaders` (parses
+  `Authorization` / `Capability-Invocation` / `Digest` into `request.zcap`).
 - **`src/digest.ts`** -- Request Body Integrity (spec "Request Body Integrity").
   `captureRawBody` (preParsing) tees JSON/text body bytes onto
   `request.rawBody`; `verifyBodyDigest` (preValidation) requires the `digest`
@@ -182,41 +186,41 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   with the pull capability the controller delegated to this server's DID. Every
   replicas route admits the controller's root invocation and a delegated
   invocation whose invoked capability targets the Space's replicas URL or a URL
-  beneath it (the `replicas-subtree` container rule), the reads under the auth
-  headers. A delegated create (POST, or PUT at an absent id) admits only a
-  `fromSpace` a registration already on the Space names, decided inside the
-  write's critical section, and a delegated pause of the registration that maps
-  the Space's controller is refused; a root invocation carries neither bound.
-  The controller check (`sync/registration.ts`) admits it in one of three
-  branches: the source controller equals the local one; the source controller is
-  a `did:webvh` hosted in the source Space whose document lists the local
-  `did:key` under `capabilityInvocation`; or, the bootstrap branch, the local
-  controller is a `did:key` the document need not list and the capability is a
-  one-link delegation from the source's root whose proof a
-  `capabilityDelegation` method of that document signs. The document comes from
-  the log read through the capability when the DID is hosted in the source
-  Space, else from the copy another registration here maps, which is how an
-  auxiliary Space controlled by the account DID registers. `PUT` at its URL
-  pauses and resumes the loop and replaces the pull capability in place, and
-  nothing else of the registration changes. Both backends store a registration
-  through one write, `writeReplica`, whose decision (`src/lib/replicaRecord.ts`)
-  is made under the lock from the registration read there. One pull loop per
-  registration reads the peer's Space and each selected Collection's `changes`
-  feed, and stores what it reads through the backend's `apply*` methods only,
-  under the peer's stamp and generation. No request route can supply a write
-  stamp. The chunk pull adds `beginChunkStaging`, `stageChunk`,
-  `listStagedChunks` and `reclaimStaging` to that family, and a `chunks` option
-  to `applyResource`. A chunked Resource's set is staged, a few chunks at a
-  time, then swapped in with its parent in one critical section, so its parent
-  takes a feed position only once the set is whole. The quota pre-check of a set
-  is the backend's, made when the run is opened. The container objects, logs and
-  policies are applied on the control plane; a Collection's Resources go to the
-  server backend its `backend.id` selects, the id meaning here what it means on
-  the peer, after the loop checks the registration on the control plane. A
-  `backend.id` this deployment does not configure stalls the Collection. A
-  replicated `did:webvh` resolves from the local copy of its log when exactly
-  one registration maps it there. See [docs/replication.md](docs/replication.md)
-  and [decision 0004](decisions/0004-stamps-are-minted-only-by-this-server.md).
+  beneath it (the `replicas-subtree` container rule), the reads too. A delegated
+  create (POST, or PUT at an absent id) admits only a `fromSpace` a registration
+  already on the Space names, decided inside the write's critical section, and a
+  delegated pause of the registration that maps the Space's controller is
+  refused; a root invocation carries neither bound. The controller check
+  (`sync/registration.ts`) admits it in one of three branches: the source
+  controller equals the local one; the source controller is a `did:webvh` hosted
+  in the source Space whose document lists the local `did:key` under
+  `capabilityInvocation`; or, the bootstrap branch, the local controller is a
+  `did:key` the document need not list and the capability is a one-link
+  delegation from the source's root whose proof a `capabilityDelegation` method
+  of that document signs. The document comes from the log read through the
+  capability when the DID is hosted in the source Space, else from the copy
+  another registration here maps, which is how an auxiliary Space controlled by
+  the account DID registers. `PUT` at its URL pauses and resumes the loop and
+  replaces the pull capability in place, and nothing else of the registration
+  changes. Both backends store a registration through one write, `writeReplica`,
+  whose decision (`src/lib/replicaRecord.ts`) is made under the lock from the
+  registration read there. One pull loop per registration reads the peer's Space
+  and each selected Collection's `changes` feed, and stores what it reads
+  through the backend's `apply*` methods only, under the peer's stamp and
+  generation. No request route can supply a write stamp. The chunk pull adds
+  `beginChunkStaging`, `stageChunk`, `listStagedChunks` and `reclaimStaging` to
+  that family, and a `chunks` option to `applyResource`. A chunked Resource's
+  set is staged, a few chunks at a time, then swapped in with its parent in one
+  critical section, so its parent takes a feed position only once the set is
+  whole. The quota pre-check of a set is the backend's, made when the run is
+  opened. The container objects, logs and policies are applied on the control
+  plane; a Collection's Resources go to the server backend its `backend.id`
+  selects, the id meaning here what it means on the peer, after the loop checks
+  the registration on the control plane. A `backend.id` this deployment does not
+  configure stalls the Collection. A replicated `did:webvh` resolves from the
+  local copy of its log when exactly one registration maps it there. See
+  [docs/replication.md](docs/replication.md) and
+  [decision 0004](decisions/0004-stamps-are-minted-only-by-this-server.md).
 - **`src/lib/importTar.ts`**, **`src/lib/importPlan.ts`**,
   **`src/lib/importRevocations.ts`** and each backend's `exportSpace` /
   `importSpace` -- Export and Import Space. The archive codec lives in
@@ -573,13 +577,14 @@ rule. `PUT /space/<S>/meta` on an existing Space, `DELETE /space/<S>/<C>/`, and
 Update Keystore refuse every delegated invocation, decided off the
 `Capability-Invocation` header before any chain is read. `DELETE /space/<S>/`
 also accepts a tail targeting exactly that Space URL with `allowedAction`
-exactly `['DELETE']`, and `PUT /space/<S>/<C>/meta/log` one targeting exactly
-the Space's items subtree. Every replicas route accepts a tail targeting the
-Space's replicas URL or a URL beneath it, and refuses a tail on the Space URL.
-`PUT /space/<S>/<C>/meta` and Create Collection carry no rule. The rule reads
-the tail alone; the client-annex clause's two bounds cover the chains it admits.
-A refusal surfaces as the masked `not-found`. Full rules in
-[docs/client-annex-clause.md](docs/client-annex-clause.md).
+exactly `['DELETE']`. `PUT /space/<S>/<C>/meta` and
+`PUT /space/<S>/<C>/meta/log` each accept one targeting exactly the Space's
+canonical URL, and refuse a tail on the Collection URL or beneath it. Every
+replicas route accepts a tail targeting the Space's replicas URL or a URL
+beneath it, and refuses a tail on the Space URL. Create Collection carries no
+rule. The rule reads the tail alone; the client-annex clause's two bounds cover
+the chains it admits. A refusal surfaces as the masked `not-found`. Full rules
+in [docs/client-annex-clause.md](docs/client-annex-clause.md).
 
 **Denial reasons:** a refusal is a 404 whose `type` is the merged `not-found`,
 with two exceptions named by `type` only, the status unchanged (`denialError` in

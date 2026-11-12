@@ -91,35 +91,37 @@ describe('Method refusals and redirects ahead of the auth hooks', () => {
     })
   })
 
-  describe('a real route still demands the auth headers', () => {
-    it('anonymous POST at a Space container URL is 401', async () => {
+  describe('a real route still refuses an anonymous request', () => {
+    it('anonymous POST at a Space container URL is the masked 404', async () => {
       const response = await app.inject({
         method: 'POST',
         url: '/space/S/',
         headers: { 'content-type': 'application/json' },
         payload: '{}'
       })
-      expect(response.statusCode).toBe(401)
+      expect(response.statusCode).toBe(404)
     })
 
-    it('anonymous PUT of the Space Metadata object is 401', async () => {
+    it('anonymous PUT of the Space Metadata object is the masked 404', async () => {
       const response = await app.inject({
         method: 'PUT',
         url: '/space/S/meta',
         headers: { 'content-type': 'application/json' },
-        payload: '{}'
+        payload: JSON.stringify({
+          controller: 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK'
+        })
       })
-      expect(response.statusCode).toBe(401)
+      expect(response.statusCode).toBe(404)
     })
 
-    it('anonymous PUT of a Resource is 401', async () => {
+    it('anonymous PUT of a Resource is the masked 404', async () => {
       const response = await app.inject({
         method: 'PUT',
         url: '/space/S/C/R',
         headers: { 'content-type': 'application/json' },
         payload: '{}'
       })
-      expect(response.statusCode).toBe(401)
+      expect(response.statusCode).toBe(404)
     })
   })
 
@@ -300,12 +302,12 @@ describe('Method refusals and redirects ahead of the auth hooks', () => {
         expectRefusal(response, '')
       })
 
-      it('anonymous GET /space/S/replicas/x/status is 401', async () => {
+      it('anonymous GET /space/S/replicas/x/status is the masked 404', async () => {
         const response = await app.inject({
           method: 'GET',
           url: '/space/S/replicas/x/status'
         })
-        expect(response.statusCode).toBe(401)
+        expect(response.statusCode).toBe(404)
       })
     })
   })

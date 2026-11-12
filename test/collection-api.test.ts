@@ -47,14 +47,16 @@ describe('Collections API', () => {
     await fastify.close()
   })
 
-  it('POST /space/:spaceId/ should 401 error when no authorization headers', async () => {
+  it('POST /space/:spaceId/ with no authorization headers is the masked not-found (404)', async () => {
     const response = await fetch(
       new URL('/space/any-space-id/', baseServerUrl),
       {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Anonymous Collection' })
       }
     )
-    assert.equal(response.status, 401)
+    assert.equal(response.status, 404)
     assert.match(
       response.headers.get('content-type')!,
       /application\/problem\+json/

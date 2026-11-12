@@ -92,10 +92,14 @@ stored bytes verbatim followed by exactly one new line. A body the stored log is
 not a prefix of is `precondition-failed` (412), with or without `If-Match`. A
 body adding more than one line is `invalid-request-body` (400).
 
-A body equal to the stored log byte for byte is a no-op. Once its preconditions
-pass, it answers 204 with the current `ETag` and writes nothing, so neither the
-log's `ETag` nor the Collection Metadata object's moves. A body that is a strict
-prefix of the stored log would erase lines and stays a 412.
+A body equal to the stored log byte for byte adds no line. Once its
+preconditions pass, it is refused with `invalid-request-body` (400) and nothing
+is written, so neither the log's `ETag` nor the Collection Metadata object's
+moves. Under a stale `If-Match` it stays a 412. A writer that retries after a
+dropped response reads the log to learn whether its append landed. A body that
+is a strict prefix of the stored log would erase lines and stays a 412. The
+`did.jsonl` log of a self-hosted `did:webvh` is an ordinary Resource, and a
+re-sent body there stays a no-op.
 
 On every append the server runs the same `encryption` and `revisions` transition
 checks against the prior head that an ordinary Collection Metadata update runs.
@@ -173,9 +177,11 @@ log write takes. See [filesystem-layout.md](filesystem-layout.md) for the gate.
 A Collection on a server backend other than the control plane runs its Resource
 writes under that backend's lock, so the server writes the log through to that
 backend as a copy after each control-plane write of it
-(`src/lib/backendMirror.ts`), and the recheck there reads the copy. A Resource
-write that lands between the two commits committed before the log write was
-answered.
+(`src/lib/backendMirror.ts`), and the recheck there reads the copy. If the copy
+faults, the request answers a 5xx though the control plane holds the log. The
+retry is refused as a re-sent log, and the server runs the copy again before it
+answers the refusal. A Resource write that lands between the two commits
+committed before the log write was answered.
 
 Inside the critical section, after its preconditions pass, the backend compares
 a write over a live Resource or chunk with the stored record. The media type is

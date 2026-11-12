@@ -377,7 +377,7 @@ describe('Governing history log API (meta/log)', () => {
       assert.match(refused.problem.type, /#invalid-request-body$/)
     })
 
-    it('[signed] re-sending the stored log is a 204 no-op: the ETag is unchanged', async () => {
+    it('[signed] re-sending the stored log is a 400 and nothing moves', async () => {
       const { collectionId, body, etag } = await governedCollection()
       const metaBefore = await alice.pws.request({
         url: metaUrl(collectionId),
@@ -386,8 +386,8 @@ describe('Governing history log API (meta/log)', () => {
       const variants: Record<string, string>[] = [{ 'if-match': etag }, {}]
       for (const headers of variants) {
         const resent = await putLog({ collectionId, body, headers })
-        assert.equal(resent.status, 204)
-        assert.equal(resent.etag, etag)
+        assert.equal(resent.status, 400)
+        assert.match(resent.problem.type, /#invalid-request-body$/)
       }
       const read = await alice.pws.request({
         url: logUrl(collectionId),
