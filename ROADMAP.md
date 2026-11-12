@@ -65,9 +65,13 @@ Ready:
   profile
 - WSS-253 [L] (*) Expose `Retry-After` to browser clients
 - WSS-254 [L] (*) Bound the length of a Space, Collection and Resource id
-- WSS-255 [L] (*) Stop accepting the root capability of a query-bearing URL
 - WSS-256 [L] (*) Answer a multipart request with too many parts as
   `invalid-request-body`
+
+Waiting on another repo:
+
+- WSS-255 [L] (*) Stop accepting the root capability of a query-bearing URL
+  (after WCL-160)
 
 **Features**
 
@@ -141,8 +145,6 @@ Ready:
 - WSS-47 [M] (*) Cover `start.ts` and the untested config parsers
 - WSS-9 [M] (*) Open the upstream `minimal-cipher` AEAD-gap issue
 - WSS-10 [M] (*) Open the upstream `edv-client` truncation issue
-- WSS-168 [L] (*) `SERVER_URL` move runbook for the server DID log (portable
-  domain move)
 - WSS-202 [L] (*) Pull-loop tests beyond the two-server filesystem case
 - WSS-210 [L] (*) One function decides where a `did:webvh` resolves from
 - WSS-215 [L] (fs) Replace the hand-rolled usage cache in the filesystem backend
@@ -150,6 +152,8 @@ Ready:
 
 Waiting on another repo:
 
+- WSS-168 [L] (*) `SERVER_URL` move runbook for the server DID log (portable
+  domain move) (after CLI-22)
 - WSS-244 [L] (*) Rename the epoch-configuration state type in test fixtures
   (after WASS-84)
 
@@ -767,8 +771,9 @@ implement once decided, and research that may end in either.
         SQL order, and a test lists ids that separate the two orders on each
         backend
   - [ ] The id validators accept any single decoded path segment: non-empty, not
-        `.` or `..`, containing no `/` (the spec's only syntax rule) and no `\`;
-        the unreserved-only pattern is gone from the accept path
+        `.` or `..`, containing no `/` (the spec's only syntax rule) and no `\`,
+        within whatever length limit WSS-254 sets; the unreserved-only pattern
+        is gone from the accept path
   - [ ] The filesystem backend maps ids to on-disk names through an injective,
         path- and glob-safe segment encoding; the encoding choice (and any
         change to export tar entry names, which are a wire artifact) gets
@@ -1075,7 +1080,7 @@ file name allows would most likely surface as a 500, since nothing handles
 `ENAMETOOLONG`; Postgres would store it. That outcome is inferred and has no
 test. The length chosen is a wire-visible limit and needs sign-off.
 
-### WSS-255: [L] (*) Stop accepting the root capability of a query-bearing URL
+### WSS-255: [L] (*) [after WCL-160] Stop accepting the root capability of a query-bearing URL
 
 - status: todo
 - priority: low
@@ -2358,7 +2363,7 @@ caller-supplied protected-header params"**
 
 ---
 
-### WSS-168: [L] (*) `SERVER_URL` move runbook for the server DID log (portable domain move)
+### WSS-168: [L] (*) [after CLI-22] `SERVER_URL` move runbook for the server DID log (portable domain move)
 
 - status: todo
 - priority: low
