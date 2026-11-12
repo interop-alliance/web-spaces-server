@@ -24,6 +24,7 @@ import type { FastifyInstance } from 'fastify'
 
 import type { PostgresBackend } from '../src/backends/postgres.js'
 import { ResourceImmutableError, StorageError } from '../src/errors.js'
+import { mirrorCollectionLog } from '../src/lib/backendMirror.js'
 import { extractTarEntries } from '../src/lib/importTar.js'
 import type { TempFileSystemBackend } from '../src/testing.js'
 import type { CollectionMetadata, ReplicaRegistration } from '../src/types.js'
@@ -594,6 +595,43 @@ describe.skipIf(!connectionString)(
         ResourceImmutableError
       )
       assert.equal(handed, true)
+    })
+
+    it('a log copy run late leaves the copy of a later append in place', async () => {
+      const spaceId = await freshSpace('Late Copy Space')
+      await createCollection(spaceId, 'ledger', { backend: { id: 'postgres' } })
+      const logUrl = url(`/space/${spaceId}/ledger/meta/log`)
+      const genesis = genesisLine(oneEpoch) + '\n'
+      const created = await alice.pws.request({
+        url: logUrl,
+        method: 'PUT',
+        body: new TextEncoder().encode(genesis),
+        headers: { 'content-type': 'text/jsonl', 'if-none-match': '*' }
+      })
+      const appended =
+        genesis + entryLine({ ordinal: 2, state: twoEpochs }) + '\n'
+      await alice.pws.request({
+        url: logUrl,
+        method: 'PUT',
+        body: new TextEncoder().encode(appended),
+        headers: {
+          'content-type': 'text/jsonl',
+          'if-match': created.headers.get('etag')
+        }
+      })
+
+      // The copy of the first write, run after the append's copy landed.
+      await mirrorCollectionLog({
+        serverBackends: fastify.serverBackends,
+        spaceId,
+        collectionId: 'ledger',
+        body: genesis
+      })
+      const copy = await pgBackend.getCollectionLog({
+        spaceId,
+        collectionId: 'ledger'
+      })
+      assert.equal(copy?.body, appended)
     })
 
     it("the feed of a Collection on the other backend carries its policies and log under the control plane's validators", async () => {

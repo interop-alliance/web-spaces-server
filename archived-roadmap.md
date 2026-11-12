@@ -7593,8 +7593,8 @@ the precondition is evaluated first.
 Implemented 2026-11-12. The `did.jsonl` log of a self-hosted `did:webvh` keeps
 its no-op: it is an ordinary Resource `PUT`, and the spec's refusal covers the
 Write Governing History Log operation alone. A retry that follows a failed copy
-to another server backend no longer brings that copy level, since the control
-plane refuses the re-sent body; the next append writes the whole log there.
+to another server backend still brings that copy level. The control plane
+refuses the re-sent body, and the copy is run again ahead of the refusal.
 
 ### WSS-260: [M] (*) Refuse a delegated Collection Metadata `PUT` under a grant that does not target the Space URL
 

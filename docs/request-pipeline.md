@@ -19,8 +19,9 @@ Two groups install an auth-header requirement ahead of `parseAuthHeaders`. The
 `/spaces/` repository group installs `requireAuthHeadersOrPublicRead`, so a
 Create Space with no auth headers is `missing-authorization` (401), and an
 anonymous List Spaces proceeds to its empty-items 200. The `/kms` group installs
-`requireAuthHeaders`, so every request there with no auth headers is a 401. The
-three groups beneath `/space/` install neither. See
+`requireAuthHeaders`, so a request there with no auth headers is a 401. A method
+refusal (405) skips the hook in every group. The three groups beneath `/space/`
+install neither. See
 [A request with no authorization headers](#a-request-with-no-authorization-headers).
 
 `src/zcap.ts` holds `handleZcapVerify()`, which performs the
@@ -298,5 +299,5 @@ chain.
 
 Two answers stay `missing-authorization` (401). Create Space at the Spaces
 Repository keeps it, since the repository's existence is not sensitive. The
-`/kms` group keeps it on every route: it is the WebKMS protocol, and the 401 is
-the same for an existing and an absent keystore.
+`/kms` group keeps it on every method a route implements: it is the WebKMS
+protocol, and the 401 is the same for an existing and an absent keystore.
