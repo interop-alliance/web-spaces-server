@@ -51,6 +51,9 @@ jobs:
       # place, so a deploy whose health check fails leaves it on the new image
       # with no automatic rollback (docs/deployment-fly.io.md, "Rolling
       # back"). Skipped when the app mounts no volume (the Postgres backend).
+      # Fly refuses a second snapshot while one is still scheduled, as after a
+      # deploy that just failed. The job goes on with a warning then, since
+      # the scheduled one may not be taken before this deploy writes.
       - name: Snapshot data volume
         run: |
           volume="$(flyctl volumes list --app "$FLY_APP" --json | jq -r '.[0].id // empty')"
@@ -58,7 +61,16 @@ jobs:
             echo "No volume to snapshot."
             exit 0
           fi
-          flyctl volumes snapshots create "$volume" --app "$FLY_APP"
+          if output="$(flyctl volumes snapshots create "$volume" --app "$FLY_APP" 2>&1)"; then
+            echo "$output"
+            exit 0
+          fi
+          echo "$output"
+          if echo "$output" | grep -q 'snapshot is already scheduled'; then
+            echo "::warning::A snapshot of $volume is already scheduled and may not be taken before this deploy writes."
+            exit 0
+          fi
+          exit 1
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

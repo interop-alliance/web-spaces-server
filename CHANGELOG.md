@@ -9,6 +9,11 @@
   after the volume snapshot and before the deploy. A deploy from a published
   release never wipes.
 
+### Fixed
+
+- The production Deploy workflow no longer stops when Fly refuses its volume
+  snapshot because an earlier one is still scheduled. It warns and goes on.
+
 ## 0.46.0 - 2026-11-12
 
 ### Added

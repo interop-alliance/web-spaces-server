@@ -436,7 +436,10 @@ The production workflow snapshots the app's data volume before each deploy
 restore point from just before the roll. Fly replaces the one machine in place,
 so a failed deploy leaves it on the new image, down, with no automatic rollback.
 The snapshot step needs the deploy token to cover volume snapshots; if it fails,
-the deploy does not run.
+the deploy does not run. The one exception is a snapshot Fly refuses because an
+earlier one is still scheduled, as on a re-run soon after a failed deploy. The
+job goes on with a warning then, and the scheduled snapshot may not be taken
+before the deploy writes.
 
 Which way back depends on what the failed boot wrote. The server stamps
 `store.json` after each converting layout step, and a server refuses a
