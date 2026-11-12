@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 258
+nextAvailableId: 261
 
 <!-- roadmap-order:index:start -->
 
@@ -55,6 +55,11 @@ Ready:
 - WSS-64 [M] (*) Default document for public collections (`index.html`)
 - WSS-162 [M] (*) Research verifying zcap invocations signed by a did:webvh
   hosted elsewhere
+- WSS-258 [M] (*) Answer an unsafe method with no authorization as the masked
+  `not-found`
+- WSS-259 [M] (*) Refuse a governing log `PUT` whose body equals the stored log
+- WSS-260 [M] (*) Refuse a delegated Collection Metadata `PUT` under a grant
+  that does not target the Space URL
 - WSS-219 [L] (*) Changing a Collection's `backend.id` once it holds Resources
 - WSS-252 [L] (*) Point the Encrypted Collections entry's `url` at the published
   profile
@@ -866,6 +871,126 @@ audience member eventually. It ships with per-connection did:keys first and
 keeps the member layout open for account DIDs, pending this item.
 
 ---
+
+### WSS-258: [M] (*) Answer an unsafe method with no authorization as the masked `not-found`
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: authorization, errors, wire-contract, conformance
+- discovered-from: the pws-conformance-suite 0.38.0 self-test run against this
+  server (2026-11-12)
+- touches:
+  - portable-web-spaces-spec: WASS-92 still lists this answer as undecided;
+    close that checkbox to match what the suite asserts
+  - pws-conformance-suite: `collection.create-unauthorized-404` and
+    `policy.anonymous-write-rejected-404` (0.38.0) fail against this server
+  - pws-client: check for a caller that reads a 401 as "sign in and retry" on a
+    Space, Collection or Resource URL
+- acceptance:
+  - [ ] An unsafe method with no `Authorization` or `Capability-Invocation`
+        header at a URL beneath `/space/:spaceId` answers the masked `not-found`
+        (404), whether or not the target exists
+  - [ ] The body is byte-identical to the one an under-authorized signed request
+        gets
+  - [ ] `POST /spaces/` with no authorization stays `missing-authorization`
+        (401), since the Spaces Repository's existence is not sensitive
+  - [ ] The reads that demand the auth headers (the policy documents and the
+        replicas routes) are decided in the same change: they answer the same
+        404, or the item records why they keep the 401
+  - [ ] The `/kms` group's answer is stated, changed or not
+  - [ ] The tests in `test/` that pin the 401 on these routes are updated
+  - [ ] The two suite cases pass under pws-conformance-suite 0.38.0 or later
+  - [ ] `docs/request-pipeline.md` and CHANGELOG.md describe the answer
+
+`requireAuthHeadersOrPublicRead` (`src/auth-header-hooks.ts`) throws
+`MissingAuthError` for every unsafe method that carries no auth headers. The 401
+is the same for an existing and an absent target, so it reveals nothing. The
+authorization profile still reserves `missing-authorization` for an operation
+whose target's existence is not sensitive, and names Create Space as the
+example. Against a Space, Collection or Resource it requires the masked
+`not-found`. Suite 0.38.0 asserts that answer. WSS-83 (the anonymous Get Policy
+with a malformed id) sits on the same hook and is settled by the fourth
+checkbox.
+
+### WSS-259: [M] (*) Refuse a governing log `PUT` whose body equals the stored log
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: history-log, wire-contract, conformance
+- discovered-from: the pws-conformance-suite 0.38.0 self-test run against this
+  server (2026-11-12)
+- touches:
+  - portable-web-spaces-spec: WASS-109 still lists this answer as undecided;
+    close that checkbox to match what the suite asserts
+  - pws-conformance-suite: `governed-log.append-fast-forward-only` (0.38.0)
+    fails against this server
+  - pws-client: a log write retried after a dropped response now reads a 400 or
+    a 412 where it read a 204; it must tell "my write landed" from the stored
+    log
+- acceptance:
+  - [ ] `PUT .../meta/log` with a body equal to the stored log byte for byte is
+        `invalid-request-body` (400) once its precondition passes, and the log
+        and the Collection Metadata object do not move
+  - [ ] A stale `If-Match` on such a body stays `precondition-failed` (412)
+  - [ ] Both backends decide it in the shared write body
+        (`mintCollectionLogWrite`), inside the critical section
+  - [ ] The replication apply path still treats a log it already holds as
+        nothing to do
+  - [ ] The item states whether the `did.jsonl` log of a self-hosted
+        `did:webvh`, which shares `isFastForward`, follows or keeps its no-op
+  - [ ] The suite case passes under pws-conformance-suite 0.38.0 or later
+  - [ ] `docs/governed-logs-and-revisions.md` and CHANGELOG.md describe the
+        refusal
+
+The spec's Write Governing History Log Operation says a body that extends the
+stored bytes by no line MUST be refused with `invalid-request-body`. The server
+answers 204 with the current `ETag` and writes nothing (`unchangedLogValidator`
+in `src/lib/governedLog.ts`). That was chosen so a retry after a dropped
+response is safe. The no-op is only reachable under the current `ETag`, since
+the precondition is evaluated first.
+
+### WSS-260: [M] (*) Refuse a delegated Collection Metadata `PUT` under a grant that does not target the Space URL
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: zcap, authorization, container-rule, wire-contract, conformance
+- discovered-from: the pws-conformance-suite 0.38.0 self-test run against this
+  server (2026-11-12)
+- touches:
+  - portable-web-spaces-spec: WASS-87 still lists this answer as undecided;
+    close that checkbox to match what the suite asserts
+  - pws-conformance-suite:
+    `container-rule.collection-meta-put-delegated-collection-target` (0.38.0)
+    fails against this server
+  - pws-client, freewallet: an app holding a Collection-scoped grant writes its
+    own index and `encryption` declarations through this route today; it needs
+    another path (the controller writes them, or a Space-URL grant)
+- acceptance:
+  - [ ] `PUT /space/:spaceId/:collectionId/meta` admits a root invocation, or a
+        delegated one whose invoked capability targets exactly the Space's
+        canonical URL
+  - [ ] A delegated invocation whose invoked capability targets the Collection
+        URL, the Metadata URL or a Resource URL answers the masked `not-found`,
+        decided off the header before any chain is read
+  - [ ] Create Collection (`POST /space/:spaceId/`) keeps no rule
+  - [ ] The tests in `test/` that write Collection Metadata under a
+        Collection-scoped grant are updated
+  - [ ] The suite case passes under pws-conformance-suite 0.38.0 or later
+  - [ ] `src/lib/containerRule.ts`'s header comment, ARCHITECTURE.md's container
+        rule paragraph, `docs/client-annex-clause.md` and CHANGELOG.md describe
+        the rule
+
+The authorization profile's container rule lists this route among the four
+controller-only operations. Its second exception admits a delegated capability
+only when the invoked capability targets the Space URL. The server once enforced
+that as `space-subtree-put` and dropped it on purpose, so that a
+Collection-scoped grant could annotate its own Collection. Every attenuating
+target writes the Metadata object today. Restoring the rule reverses that
+relaxation, and the wallet-side callers listed under `touches` break until they
+move.
 
 ### WSS-219: [L] (*) Changing a Collection's `backend.id` once it holds Resources
 
