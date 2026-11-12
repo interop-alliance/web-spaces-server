@@ -14,6 +14,13 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      ref:
+        description: >-
+          The tag, branch or commit to deploy, when it is not the one the
+          workflow runs from. Rolling back deploys a previous tag this way, with
+          the current workflow.
+        type: string
+        default: ''
       wipe_data:
         description: >-
           Wipe the production data volume and the production Postgres database
@@ -43,7 +50,10 @@ jobs:
             exit 1
           fi
 
+      # An empty ref checks out the commit the workflow runs from.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 

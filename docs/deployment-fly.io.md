@@ -448,8 +448,8 @@ before any converting step writes, so a boot a refusing step refused wrote
 nothing.
 
 - The new release stamped nothing. Dispatch the Deploy workflow on the previous
-  tag (`gh workflow run deploy.yml --ref v<previous>`). The previous release
-  boots on the volume as it is.
+  tag (`gh workflow run deploy.yml --ref main -f ref=v<previous>`). The previous
+  release boots on the volume as it is.
 - The new release stamped a newer layout, or the failure is not a layout refusal
   and the previous release still does not boot. Restore the snapshot into a new
   volume (`fly volumes snapshots list <volume-id>`, then

@@ -8,6 +8,9 @@
   by default. It clears the data volume and drops the Postgres `public` schema
   after the volume snapshot and before the deploy. A deploy from a published
   release never wipes.
+- The production Deploy workflow, run by hand, takes a `ref` input naming the
+  tag, branch or commit to deploy. A rollback runs the current workflow over a
+  previous tag.
 
 ### Fixed
 
