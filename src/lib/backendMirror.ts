@@ -51,6 +51,7 @@ import {
 } from '../errors.js'
 import type { ApplyResult } from './replicaApply.js'
 import { containerFeedDocument, type EtagValidator } from './etag.js'
+import { isFastForward } from './governedLog.js'
 import { stampOf, withoutStampMembers } from './hlc.js'
 import { stripMetadataValidator } from './metadataValidator.js'
 import type { ServerBackends } from './serverBackends.js'
@@ -197,8 +198,10 @@ export async function mirrorCollectionMetadata({
  * plane evaluated the request's precondition and the line contract. The
  * copy of the Collection Metadata object is written first when the backend
  * holds none, so a copy an earlier fault left out is brought level here. A
- * copy that already holds `body` is left alone, since a backend refuses a log
- * write that adds no line. The copy can therefore be run again.
+ * copy that already holds `body`, or a log that extends it, is left alone. A
+ * backend refuses a log write that adds no line, and a copy run late must not
+ * shorten the copy of a later append. The backend decides the second case
+ * again under its own lock. The copy can therefore be run again.
  * @param options {object}
  * @param options.serverBackends {ServerBackends}
  * @param options.spaceId {string}
@@ -226,10 +229,34 @@ export async function mirrorCollectionLog({
     return
   }
   const held = await backend.getCollectionLog({ spaceId, collectionId })
-  if (held?.body === body) {
+  if (held !== undefined && isFastForward({ prior: body, body: held.body })) {
     return
   }
-  await backend.writeCollectionLog({ spaceId, collectionId, body })
+  let overtaken = false
+  try {
+    await backend.writeCollectionLog({
+      spaceId,
+      collectionId,
+      body,
+      assertTransition: ({ prior }) => {
+        // A later append's copy landed since the read above.
+        if (
+          prior !== undefined &&
+          isFastForward({ prior: body, body: prior.body })
+        ) {
+          overtaken = true
+          throw new PreconditionFailedError({
+            requestName: 'Copy Collection History Log',
+            detail: 'The copy already holds a log that extends the body.'
+          })
+        }
+      }
+    })
+  } catch (err) {
+    if (!overtaken) {
+      throw err
+    }
+  }
 }
 
 /**

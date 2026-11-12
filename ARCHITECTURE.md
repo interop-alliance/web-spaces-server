@@ -36,33 +36,35 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   `parseAuthHeaders` `onRequest` hook, then the `captureRawBody` (preParsing)
   and `verifyBodyDigest` (preValidation) digest hooks. The groups beneath
   `/space/` install no auth-header requirement: a request with no auth headers
-  reaches its handler, whose authorization answers the masked `not-found` (404).
-  The `/spaces/` repository group answers an unsafe method with no auth headers
-  `missing-authorization` (401), and the `/kms` group every method. A container
-  (a Space or a Collection) is canonically addressed with a trailing slash:
-  `GET` lists its members, `POST` adds one, `DELETE` removes the container, and
-  `PUT` is not defined there. What a container _is_ lives at its `meta`
-  sub-resource: `GET`/`PUT /space/:spaceId/meta` is the Space Metadata object
-  and `GET`/`PUT /space/:spaceId/:collectionId/meta` the Collection Metadata
-  object. Every URL a group registers answers 405 for each method it does not
-  implement, with an `Allow` header naming the methods it does. The refusals are
-  derived from the router: each group records its route URLs with an `onRoute`
-  hook (`collectRouteUrls`) and ends with `refuseUnimplementedMethods`, which
-  must stay last in its group. The only hand-written input is the `PUT`/`DELETE`
-  hints and the two anchors a Space does not serve (`/space/:spaceId/query` and
-  `/space/:spaceId/meta/log`). The 405 has no problem `type` (RFC 9457
-  `about:blank`, title `Method Not Allowed`). A path beneath a reserved segment
-  that no route serves is a 404: `refusePathsBeneath` registers a `<segment>/*`
-  wildcard for each id in the reserved-id registry (`lib/validateId.ts`),
-  answered through `reply.callNotFound()`. The no-slash form of a container URL,
-  and the slash form of a Resource or chunk URL, redirect to the canonical form
-  with a 308 for every method the canonical form implements, so a signed request
-  must be re-signed for the redirect target. A refusal and a redirect carry the
-  `noAuth` route config: the auth-header, `parseAuthHeaders` and digest hooks
-  skip them, and they answer the same whether or not the target exists and
-  whatever the caller's identity. `OPTIONS` is left to the CORS preflight, and
-  `HEAD` follows `GET`. The full rules of the refusals, the reserved paths and
-  the redirects are in [docs/request-pipeline.md](docs/request-pipeline.md).
+  reaches its handler. A read may be granted by an access-control policy, and
+  anything else is answered the masked `not-found` (404). The `/spaces/`
+  repository group answers an unsafe method with no auth headers
+  `missing-authorization` (401), and the `/kms` group every method a route
+  implements. A container (a Space or a Collection) is canonically addressed
+  with a trailing slash: `GET` lists its members, `POST` adds one, `DELETE`
+  removes the container, and `PUT` is not defined there. What a container _is_
+  lives at its `meta` sub-resource: `GET`/`PUT /space/:spaceId/meta` is the
+  Space Metadata object and `GET`/`PUT /space/:spaceId/:collectionId/meta` the
+  Collection Metadata object. Every URL a group registers answers 405 for each
+  method it does not implement, with an `Allow` header naming the methods it
+  does. The refusals are derived from the router: each group records its route
+  URLs with an `onRoute` hook (`collectRouteUrls`) and ends with
+  `refuseUnimplementedMethods`, which must stay last in its group. The only
+  hand-written input is the `PUT`/`DELETE` hints and the two anchors a Space
+  does not serve (`/space/:spaceId/query` and `/space/:spaceId/meta/log`). The
+  405 has no problem `type` (RFC 9457 `about:blank`, title
+  `Method Not Allowed`). A path beneath a reserved segment that no route serves
+  is a 404: `refusePathsBeneath` registers a `<segment>/*` wildcard for each id
+  in the reserved-id registry (`lib/validateId.ts`), answered through
+  `reply.callNotFound()`. The no-slash form of a container URL, and the slash
+  form of a Resource or chunk URL, redirect to the canonical form with a 308 for
+  every method the canonical form implements, so a signed request must be
+  re-signed for the redirect target. A refusal and a redirect carry the `noAuth`
+  route config: the auth-header, `parseAuthHeaders` and digest hooks skip them,
+  and they answer the same whether or not the target exists and whatever the
+  caller's identity. `OPTIONS` is left to the CORS preflight, and `HEAD` follows
+  `GET`. The full rules of the refusals, the reserved paths and the redirects
+  are in [docs/request-pipeline.md](docs/request-pipeline.md).
 - **`src/requests/*Request.ts`** -- request handlers as static class methods
   (`SpaceRequest.post`, etc.). Each handler follows the same shape: fetch the
   Space/Collection for context, call `handleZcapVerify(...)`, then call a
