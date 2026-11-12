@@ -75,8 +75,8 @@ jobs:
       # directory. The command runs through the Machines API exec call, the
       # same API the deploy below updates the machine through, so the deploy
       # token reaches it. The deploy then replaces the process, which stamps
-      # the empty data directory at the current layout version. Staging only:
-      # the production workflow has no such option.
+      # the empty data directory at the current layout version. The
+      # production workflow has the same option, off by default.
       - name: Wipe data volume
         if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
         run: |

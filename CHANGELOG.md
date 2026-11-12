@@ -1,5 +1,14 @@
 # History
 
+## 0.46.1 - TBD
+
+### Added
+
+- The production Deploy workflow, run by hand, offers a `wipe_data` option, off
+  by default. It clears the data volume and drops the Postgres `public` schema
+  after the volume snapshot and before the deploy. A deploy from a published
+  release never wipes.
+
 ## 0.46.0 - 2026-11-12
 
 ### Added

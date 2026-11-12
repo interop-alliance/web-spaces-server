@@ -4,13 +4,23 @@ name: Deploy
 # published, or by hand from the Actions tab. The `production` environment
 # holds the deploy token (secret FLY_API_TOKEN) and the deployment's own
 # values (variables FLY_APP and SERVER_URL), which replace the placeholders in
-# fly.toml. Pull requests from forks cannot reach that environment. See
+# fly.toml. When the app uses Postgres, the environment also holds its
+# connection string (secret DATABASE_URL), which the wipe below reaches the
+# database with. Pull requests from forks cannot reach that environment. See
 # docs/deployment-fly.io.md.
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      wipe_data:
+        description: >-
+          Wipe the production data volume and the production Postgres database
+          before deploying. Every Space is deleted. The server then starts over
+          an empty data directory and an empty schema.
+        type: boolean
+        default: false
 
 concurrency:
   group: fly-deploy
@@ -52,11 +62,53 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+      # Connects to the database before either wipe, so a database the runner
+      # cannot reach stops the job before anything is wiped.
+      - name: Check Postgres database
+        if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            exit 0
+          fi
+          psql "$DATABASE_URL" --set ON_ERROR_STOP=1 --command 'SELECT 1' > /dev/null
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # Clears the volume on the running machine, keeping the ext4 lost+found
+      # directory. Runs after the snapshot above, so the wiped data has a
+      # restore point. The exec call needs a running machine: when the current
+      # release does not boot, deploy the previous tag first.
+      - name: Wipe data volume
+        if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
+        run: |
+          machine="$(flyctl machine list --app "$FLY_APP" --json | jq -r '.[0].id')"
+          if [ -z "$machine" ] || [ "$machine" = null ]; then
+            echo "::error::No machine found for $FLY_APP."
+            exit 1
+          fi
+          flyctl machine exec --app "$FLY_APP" "$machine" \
+            "find /data -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Drops the `public` schema and creates it again empty. With no
+      # DATABASE_URL secret there is no Postgres backend to wipe.
+      - name: Wipe Postgres database
+        if: github.event_name == 'workflow_dispatch' && inputs.wipe_data
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "No DATABASE_URL secret on the production environment, so there is no Postgres database to wipe."
+            exit 0
+          fi
+          psql "$DATABASE_URL" --set ON_ERROR_STOP=1 \
+            --command 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
       # Builds the Dockerfile on Fly's remote builder and rolls the machine.
       - name: Deploy
         run: >-
-          flyctl deploy --remote-only
-          --app "$FLY_APP"
-          --env "SERVER_URL=$SERVER_URL"
+          flyctl deploy --remote-only --app "$FLY_APP" --env
+          "SERVER_URL=$SERVER_URL"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

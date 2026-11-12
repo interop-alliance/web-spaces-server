@@ -418,6 +418,10 @@ database of its own. A wipe also removes the `server` Space's `did:webvh` log,
 which the admin puts back as under "Server identity" in the admin guide. A
 deploy after CI never wipes.
 
+Running the production workflow by hand offers the same `wipe_data` option, off
+by default. It runs after the volume snapshot, so the wiped data has a restore
+point. A deploy from a published release never wipes.
+
 Neither workflow runs on pull requests, so a pull request from a fork cannot
 read the tokens or the variables. The staging workflow runs after every CI run,
 but deploys only when the run passed and was triggered by a push.
@@ -454,9 +458,10 @@ nothing.
   backend, an empty volume leaves the database's rows in place, so drop its
   `public` schema too before the re-run
   (`psql "$DATABASE_URL" --command 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'`).
-  The staging workflow's `wipe_data` option is no help here: its volume wipe
+  The `wipe_data` option is no help while the machine is down: its volume wipe
   runs `fly machine exec`, which needs a running machine, and the job stops
-  there before it reaches the database.
+  there before it reaches the database. Dispatch the workflow on the previous
+  tag first, then dispatch it on `main` with `wipe_data` on.
 
 Read the machine's log first (`fly logs --app <app> --no-tail`): a
 `StoreVersionError` names the layout version `store.json` carries and the one
