@@ -293,7 +293,7 @@ describe('Service description API', () => {
       expectDiscoverable(response)
     })
 
-    it('is on an error from the error handler (401)', async () => {
+    it('is on an error from the error handler (404)', async () => {
       const response = await fetch(
         `${baseServerUrl}space/${alice.space1.id}/private-notes/note`,
         {
@@ -302,7 +302,7 @@ describe('Service description API', () => {
           body: JSON.stringify({ name: 'anonymous write' })
         }
       )
-      expect(response.status).toBe(401)
+      expect(response.status).toBe(404)
       expectDiscoverable(response)
     })
 

@@ -2460,7 +2460,7 @@ export class PostgresBackend implements StorageBackend {
         return undefined
       }
       const prior = storedLogFromRow(row)
-      const { validator, changed } = await mintCollectionLogWrite({
+      const validator = await mintCollectionLogWrite({
         collectionId,
         collectionMetadata,
         prior,
@@ -2470,9 +2470,6 @@ export class PostgresBackend implements StorageBackend {
         assertTransition,
         clock: this.#clock
       })
-      if (!changed) {
-        return validator
-      }
       const { generation, stamp } = validator
       // The served Collection Metadata object changed with its derived
       // member, so its local validator segment advances; its generation and

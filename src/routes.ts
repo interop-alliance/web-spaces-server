@@ -1,8 +1,14 @@
 /**
  * Route layer: maps URL patterns to *Request handler methods. Each group first
- * installs the `requireAuthHeadersOrPublicRead` then `parseAuthHeaders`
- * onRequest hooks, and redirects the non-canonical slash variant of a path to
- * the canonical form with a 308 (spec "Reading This Document"). A container
+ * installs its auth-header requirement, if it has one, then the
+ * `parseAuthHeaders` onRequest hook, and redirects the non-canonical slash
+ * variant of a path to the canonical form with a 308 (spec "Reading This
+ * Document"). The three groups beneath `/space/` install no requirement: a
+ * request with no auth headers reaches its handler, whose authorization
+ * answers the masked `not-found` (404), the same body an under-authorized
+ * signed request gets. The `/spaces/` repository group answers an unsafe
+ * method with no auth headers `missing-authorization` (401), since the
+ * repository's existence is not sensitive. A container
  * -- the `/spaces/` repository, a Space, a Collection, a Resource's `chunks/`
  * -- is canonically addressed WITH the trailing slash: `GET` lists its
  * members, `POST` adds one, `DELETE` removes the container, and `PUT` is not
@@ -21,7 +27,7 @@
  * no route serves is not found (`refusePathsBeneath`). Both, like the slash
  * redirects, are marked `config.noAuth`: they answer the same whoever asks,
  * so the group's auth and digest hooks skip them and an anonymous request
- * gets the 405, 404 or 308 rather than a 401.
+ * gets the 405, 404 or 308 before any authorization.
  */
 import type { Readable } from 'node:stream'
 import type {
@@ -78,17 +84,23 @@ import {
  * @param [options.provisioningRoutes] {ProvisioningRoute[]}   routes (URLs
  *   exactly as registered in this group) that go through the provisioning
  *   gate; omit for groups with no provisioning endpoint
- * @param [options.strictAuth] {boolean}   require auth headers on every method
- *   (`requireAuthHeaders`) rather than letting safe reads through
- *   (`requireAuthHeadersOrPublicRead`, the default)
+ * @param [options.authHeaders] {'every-method' | 'unsafe-methods'}   which
+ *   requests the group answers `missing-authorization` (401) when they carry
+ *   no auth headers: every one (`requireAuthHeaders`), or the unsafe methods
+ *   (`requireAuthHeadersOrPublicRead`). Omitted for the groups beneath
+ *   `/space/`, where the handler's authorization answers the masked
+ *   `not-found` (404) instead
  * @returns {void}
  */
 function installGroupHooks(
   app: FastifyInstance,
   {
     provisioningRoutes,
-    strictAuth = false
-  }: { provisioningRoutes?: ProvisioningRoute[]; strictAuth?: boolean } = {}
+    authHeaders
+  }: {
+    provisioningRoutes?: ProvisioningRoute[]
+    authHeaders?: 'every-method' | 'unsafe-methods'
+  } = {}
 ): void {
   app.setErrorHandler(handleError)
 
@@ -103,17 +115,18 @@ function installGroupHooks(
   function guarded(hook: OnRequestHook): OnRequestHook {
     return unlessNoAuthRoute(unlessProvisioningAuthorized(hook))
   }
-  if (strictAuth) {
+  if (authHeaders === 'every-method') {
     // Every operation is privileged: 401 when auth headers are absent.
     app.addHook('onRequest', guarded(requireAuthHeaders))
-  } else {
-    // Writes require auth; reads (GET/HEAD) may proceed unauthenticated so the
-    // handler can fall back to an access-control policy (e.g. a public Space,
-    // Collection or Resource). In the SpacesRepository group that fallback is
-    // the spec's empty-items 200 for an anonymous List Spaces, never an error
-    // (the exception to 404 masking).
+  } else if (authHeaders === 'unsafe-methods') {
+    // The SpacesRepository group. Create Space requires auth (401), and an
+    // anonymous List Spaces proceeds to the spec's empty-items 200.
     app.addHook('onRequest', guarded(requireAuthHeadersOrPublicRead))
   }
+  // Otherwise no requirement is installed. A request with no auth headers
+  // reaches its handler: a read may be granted by an access-control policy
+  // (e.g. a public Space, Collection or Resource), and anything else is
+  // refused by the handler's authorization as the masked `not-found`.
   // Parse the relevant request headers, set the request.zcap parameter
   app.addHook('onRequest', guarded(parseAuthHeaders))
   // Capture raw body bytes (JSON/text) so the digest can be recomputed against
@@ -555,9 +568,8 @@ const STRIP_SLASH_METHODS: HTTPMethods[] = ['GET', 'HEAD', 'PUT', 'DELETE']
 /**
  * Registers the access-control policy routes at one level's `policy` URL
  * (Space, Collection or Resource): Get, Put and Delete Policy. A policy is not
- * public data, so its GET is privileged even though the group's hook lets
- * safe methods through: the route-level `requireAuthHeaders` (run after the
- * group chain) demands the auth headers (401).
+ * public data, so its GET is privileged: the handler verifies a capability
+ * and consults no policy, so an anonymous read is the masked `not-found`.
  * @param app {import('fastify').FastifyInstance}   the owning route group
  * @param url {string}   the `policy` URL template
  * @returns {void}
@@ -566,7 +578,7 @@ function registerPolicyRoutes(app: FastifyInstance, url: string): void {
   app.get<{
     Params: PolicyParams
     Querystring: { include?: string | string[] }
-  }>(url, { onRequest: requireAuthHeaders }, PolicyRequest.get)
+  }>(url, PolicyRequest.get)
   app.put(url, PolicyRequest.put)
   app.delete(url, PolicyRequest.delete)
 }
@@ -575,7 +587,8 @@ function registerPolicyRoutes(app: FastifyInstance, url: string): void {
  * Registers SpacesRepository routes (POST/GET /spaces/, the bare `/spaces`
  * redirect, and the 405 refusals of every other method). Installs the
  * `requireAuthHeadersOrPublicRead` then `parseAuthHeaders` onRequest hooks and
- * the `handleError` error handler.
+ * the `handleError` error handler. It is the one PWS group that answers an
+ * unsafe method with no auth headers `missing-authorization` (401).
  * @param app {import('fastify').FastifyInstance}
  * @param options {object}   Fastify plugin options
  * @returns {Promise<void>}
@@ -591,7 +604,8 @@ export async function initSpacesRepositoryRoutes(
     provisioningRoutes: [
       { method: 'POST', url: '/spaces' },
       { method: 'POST', url: '/spaces/' }
-    ]
+    ],
+    authHeaders: 'unsafe-methods'
   })
   const urls = collectRouteUrls(app)
 
@@ -704,24 +718,21 @@ export async function initSpaceRoutes(
   // controller's root invocation and a delegated invocation whose invoked
   // capability targets the replicas URL or a URL beneath it, the
   // `replicas-subtree` container rule (`requests/ReplicaRequest.ts`), which
-  // keeps a data grant on the Space URL out. Each `GET` demands the auth
-  // headers (401) rather than passing as a public read.
+  // keeps a data grant on the Space URL out. Each `GET` verifies a capability
+  // and consults no policy, so an anonymous read is the masked `not-found`.
   app.get<{ Params: { spaceId: string } }>(
     '/space/:spaceId/replicas',
-    { onRequest: requireAuthHeaders },
     ReplicaRequest.list
   )
   app.post('/space/:spaceId/replicas', ReplicaRequest.post)
   app.get<{ Params: { spaceId: string; replicaId: string } }>(
     '/space/:spaceId/replicas/:replicaId',
-    { onRequest: requireAuthHeaders },
     ReplicaRequest.get
   )
   app.put('/space/:spaceId/replicas/:replicaId', ReplicaRequest.put)
   app.delete('/space/:spaceId/replicas/:replicaId', ReplicaRequest.delete)
   app.get<{ Params: { spaceId: string; replicaId: string } }>(
     '/space/:spaceId/replicas/:replicaId/status',
-    { onRequest: requireAuthHeaders },
     ReplicaRequest.status
   )
 
@@ -1015,7 +1026,7 @@ export async function initKmsRoutes(
 ): Promise<void> {
   installGroupHooks(app, {
     provisioningRoutes: [{ method: 'POST', url: '/kms/keystores' }],
-    strictAuth: true
+    authHeaders: 'every-method'
   })
   const urls = collectRouteUrls(app)
 

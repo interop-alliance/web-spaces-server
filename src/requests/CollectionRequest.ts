@@ -463,18 +463,20 @@ export class CollectionRequest {
     }
 
     // Verify (capability-only): writing the object requires a valid
-    // capability invocation; no access-control-policy fallback. No container
-    // rule here: a grant on the Space subtree, on the Collection container
-    // URL, or on this Metadata URL all write the object, so an app holding a
-    // Collection-scoped grant can declare its own indexes, and its
-    // `encryption` when the write creates the Collection.
-    // Delete Collection stays controller-only, and the sibling `meta/log`
-    // write keeps the Space-subtree rule.
+    // capability invocation; no access-control-policy fallback. The
+    // container rule: the write takes a direct root invocation, or a
+    // delegated capability whose invoked grant targets exactly the Space's
+    // canonical URL. A grant on the Collection container URL, on this
+    // Metadata URL, or on a Resource URL is refused, so a Collection data
+    // grant does not rewrite the Collection's configuration. The sibling
+    // `meta/log` write carries the same rule, and Delete Collection stays
+    // controller-only.
     await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: collectionMetaPath({ spaceId, collectionId }),
-      requestName
+      requestName,
+      containerRule: 'space-subtree-put'
     })
 
     // zCap checks out, continue. The object is composed inside the backend's
@@ -674,8 +676,9 @@ export class CollectionRequest {
    * and, against the prior head, both descriptors' transition checks,
    * atomically with the write. Authorization is capability-only (the `PUT` action), as
    * for `/meta`. Does NOT create a Collection. Returns 204 with the log's new
-   * `ETag`. A body equal to the stored log, byte for byte, is a no-op: the
-   * backend answers it with the current validator and writes nothing.
+   * `ETag`. A body equal to the stored log, byte for byte, extends it by no
+   * line: the backend refuses it with `invalid-request-body` (400) once its
+   * precondition passes, and writes nothing.
    *
    * @param request {import('fastify').FastifyRequest}
    * @param reply {import('fastify').FastifyReply}
@@ -703,7 +706,7 @@ export class CollectionRequest {
     // derives the served `encryption` descriptor and refuses every direct
     // `encryption` write, so a grant aimed at the Collection container URL,
     // this log URL, or a Resource URL is refused. The sibling `PUT /meta`
-    // carries no such rule.
+    // carries the same rule.
     await fetchSpaceAndVerify({
       request,
       spaceId,

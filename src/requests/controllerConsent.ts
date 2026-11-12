@@ -10,6 +10,7 @@
  */
 import type { FastifyRequest } from 'fastify'
 import {
+  assertInvocationPresent,
   baseDelegationSigner,
   embeddedDelegations,
   isRootInvocation,
@@ -177,8 +178,12 @@ export async function verifyBodyControllerConsent({
   maxChainLength?: number
   maxDelegationTtl?: number
 }): Promise<void> {
-  // The strict `requireAuthHeaders` hook guarantees auth headers were present
-  // and `parseAuthHeaders` set `request.zcap` before any calling handler.
+  // Every caller already refused a request with no auth headers: the
+  // `/spaces/` and `/kms` groups through their auth-header hook (401), and
+  // Create Space by Id through its own `assertInvocationPresent` (the masked
+  // 404). The check is repeated here so `request.zcap` is set whatever the
+  // caller did.
+  assertInvocationPresent({ headers: request.headers })
   const { keyId, invocation } = request.zcap!
   const zcapSigningDid = didOfMethodId(keyId)
   const rootInvocation = isRootInvocation({ invocation })

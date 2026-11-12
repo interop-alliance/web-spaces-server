@@ -62,6 +62,29 @@
   clause refuses a ladder-signed delegation listing `HEAD`, and its replica pull
   shape admits `GET` alone. The `signedInject` test helper signs a `HEAD` as
   `GET`.
+- BREAKING: a request with no `Authorization` or no `Capability-Invocation`
+  header beneath `/space/:spaceId` answers the masked `not-found` (404) where it
+  answered `missing-authorization` (401). That covers every unsafe method, Get
+  Policy at all three levels, and the replicas reads. The body is the same bytes
+  an under-authorized signed request gets at that URL. Create Space at
+  `POST /spaces/` and every `/kms` route keep the 401.
+- BREAKING: `PUT .../meta/log` with a body equal to the stored governing history
+  log is refused with `invalid-request-body` (400) once its precondition passes,
+  where it answered 204 and wrote nothing. A stale `If-Match` on such a body
+  stays `precondition-failed` (412). A re-sent `did.jsonl` log of a self-hosted
+  `did:webvh` stays a no-op.
+- A refused `PUT .../meta/log` whose body the control plane already stores runs
+  the copy to the Collection's server backend again before it answers, so a copy
+  that faulted on the first attempt is brought level by the retry.
+- Create Space by Id and revocation submission refuse a request with no auth
+  headers before their create-only checks and the submitted chain's
+  verification.
+- BREAKING: `PUT /space/:spaceId/:collectionId/meta` carries the container rule
+  the governing log write carries. It admits a root invocation, or a delegated
+  one whose invoked capability targets exactly the Space's canonical URL. A
+  delegated invocation whose capability targets the Collection URL, the Metadata
+  URL or a Resource URL answers the masked `not-found` (404). Create Collection
+  by `POST` keeps no rule.
 - The write-once rule on an `immutable` Collection compares the digest of the
   bytes a write would store with the stored digest, and reads no stored bytes (a
   live filesystem sidecar with no digest is compared through a digest of its

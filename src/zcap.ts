@@ -72,6 +72,7 @@ import {
   UnauthorizedError,
   isServerFault
 } from './errors.js'
+import { hasAuthHeaders } from './auth-header-hooks.js'
 import {
   CAPABILITY_REVOKED_ERROR_NAME,
   capabilitySummaries,
@@ -780,6 +781,7 @@ export async function handleZcapVerify({
   containerRule?: ContainerRule
   peerWebvh?: PeerWebvhResolver
 }): Promise<VerifyCapabilityInvocationResult> {
+  assertInvocationPresent({ headers, requestName })
   // The `controller-only` container rule turns on nothing but whether the
   // `Capability-Invocation` header embeds a delegated capability, so it is
   // decided here, before the library dereferences the chain, verifies every
@@ -919,24 +921,37 @@ export function capabilityActionOf({ method }: { method: string }): string {
  * @param options.request {FastifyRequest}   the request being authorized
  * @param [options.peerWebvh] {boolean}   let a foreign `did:webvh` with no
  *   stored log invoke a delegated capability (see `handleZcapVerify`)
+ * @param [options.allowedAction] {string}   expected action; defaults to the
+ *   action of the request's HTTP method (see `capabilityActionOf`), which is
+ *   what a PWS route expects
  * @returns {Promise<VerifyCapabilityInvocationResult>}   as
  *   `handleZcapVerify` returns it; every other option is passed to it as is
  */
 export async function verifyRequestZcap({
   request,
   peerWebvh = false,
+  allowedAction = capabilityActionOf({ method: request.method }),
   ...options
 }: {
   request: FastifyRequest
   peerWebvh?: boolean
+  allowedAction?: string
 } & Omit<
   Parameters<typeof handleZcapVerify>[0],
-  'url' | 'method' | 'headers' | 'serverUrl' | 'webvh' | 'logger' | 'peerWebvh'
+  | 'url'
+  | 'method'
+  | 'headers'
+  | 'serverUrl'
+  | 'webvh'
+  | 'logger'
+  | 'peerWebvh'
+  | 'allowedAction'
 >): Promise<VerifyCapabilityInvocationResult> {
   const { url, method, headers } = request
   const { serverUrl, storage, serverBackends } = request.server
   return await handleZcapVerify({
     ...options,
+    allowedAction,
     url,
     method,
     headers,
@@ -1037,6 +1052,33 @@ function denialError({
     return new CapabilityRevokedError({ requestName, cause })
   }
   return new CapabilityExpiredError({ requestName, cause })
+}
+
+/**
+ * Refuses a request that carries no capability invocation (no `Authorization`
+ * or no `Capability-Invocation` header) with the masked `UnauthorizedError`
+ * (404). A request with no credential is answered exactly as a signed one
+ * that lacks the privilege, under the same request name, so the two bodies
+ * are the same bytes. The PWS route groups beneath `/space/` let such a
+ * request reach its handler, and every capability verification starts here.
+ * A handler that runs other checks ahead of its verification calls it first,
+ * so those checks answer nothing to a request with no credential.
+ * @param options {object}
+ * @param options.headers {IncomingHttpHeaders}
+ * @param [options.requestName] {string}   request name used in the error
+ *   title
+ * @returns {void}
+ */
+export function assertInvocationPresent({
+  headers,
+  requestName
+}: {
+  headers: IncomingHttpHeaders
+  requestName?: string
+}): void {
+  if (!hasAuthHeaders({ headers })) {
+    throw new UnauthorizedError({ requestName })
+  }
 }
 
 /**
@@ -1893,6 +1935,7 @@ export async function handleRevocationInvocationVerify({
   requestName?: string
   logger: ZcapLogger
 }): Promise<void> {
+  assertInvocationPresent({ headers, requestName })
   const fullRequestUrl = absoluteUrl({ path: url, serverUrl })
   const documentLoader = rootCapabilityLoader({
     controllerFor: target => {

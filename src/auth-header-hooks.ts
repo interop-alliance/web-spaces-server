@@ -3,7 +3,11 @@
  * Capability-Invocation are missing), `requireAuthHeadersOrPublicRead` (same,
  * but safe methods pass through unauthenticated), and `parseAuthHeaders`
  * (parses the auth headers into `request.zcap`). Every route group in
- * routes.js installs `requireAuthHeadersOrPublicRead` then `parseAuthHeaders`.
+ * routes.js installs `parseAuthHeaders`. The `/kms` group installs
+ * `requireAuthHeaders` ahead of it and the `/spaces/` repository group
+ * `requireAuthHeadersOrPublicRead`. The groups beneath `/space/` install
+ * neither: there a request with no auth headers is refused by its handler's
+ * authorization, as the masked `not-found` (404).
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import {
@@ -133,12 +137,15 @@ export function invokerDid(request: FastifyRequest): IDID | undefined {
  * True when the request presents both auth-related headers a capability
  * invocation needs (`Authorization` and `Capability-Invocation`). The presence
  * test the hooks below gate on. Presence only -- neither header is parsed or
- * verified here.
+ * verified here. It is the one definition of that test: the hooks, the policy
+ * fallback and `assertInvocationPresent` in `zcap.ts` all read it.
  *
- * @param request {import('fastify').FastifyRequest}
+ * @param request {Pick<import('fastify').FastifyRequest, 'headers'>}
  * @returns {boolean}
  */
-export function hasAuthHeaders(request: FastifyRequest): boolean {
+export function hasAuthHeaders(
+  request: Pick<FastifyRequest, 'headers'>
+): boolean {
   const { headers } = request
   return Boolean(headers.authorization && headers['capability-invocation'])
 }
@@ -162,9 +169,7 @@ export function isSafeMethod(method: string): boolean {
  * privileged: the WebKMS `/kms` group uses it (every webkms route is
  * zcap-invoked; the protocol has no public reads). No PWS group qualifies --
  * even the SpacesRepository group lets anonymous List Spaces reads through,
- * answered with the spec's empty-items 200. Individual PWS routes whose reads
- * are privileged (the policy GETs) install it as a route-level `onRequest`
- * hook on top of their group's relaxed one.
+ * answered with the spec's empty-items 200.
  * @param request {import('fastify').FastifyRequest}
  * @param reply {import('fastify').FastifyReply}
  * @returns {Promise<void>}
@@ -180,11 +185,10 @@ export async function requireAuthHeaders(
 
 /**
  * Like `requireAuthHeaders`, but lets safe (read) methods through without auth
- * so the handler can decide what an anonymous read sees: a fallback
- * access-control policy (e.g. a world-readable Resource), or for List Spaces
- * the empty-items 200. The handler still denies anonymous reads that no policy
- * authorizes. Unsafe methods (writes) still require auth. Used by every route
- * group.
+ * so the handler can decide what an anonymous read sees: for List Spaces, the
+ * empty-items 200. Unsafe methods (Create Space) still require auth, answered
+ * `missing-authorization` (401), since the repository's existence is not
+ * sensitive. Used by the SpacesRepository group alone.
  * @param request {import('fastify').FastifyRequest}
  * @param reply {import('fastify').FastifyReply}
  * @returns {Promise<void>}

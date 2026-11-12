@@ -43,7 +43,12 @@
  */
 import { isWriteStamp } from '@interop/storage-core'
 
-import { SpaceNotFoundError, StorageError } from '../errors.js'
+import {
+  InvalidRequestBodyError,
+  PreconditionFailedError,
+  SpaceNotFoundError,
+  StorageError
+} from '../errors.js'
 import type { ApplyResult } from './replicaApply.js'
 import { containerFeedDocument, type EtagValidator } from './etag.js'
 import { stampOf, withoutStampMembers } from './hlc.js'
@@ -191,7 +196,9 @@ export async function mirrorCollectionMetadata({
  * server backend. The whole log is written, unconditionally: the control
  * plane evaluated the request's precondition and the line contract. The
  * copy of the Collection Metadata object is written first when the backend
- * holds none, so a copy an earlier fault left out is brought level here.
+ * holds none, so a copy an earlier fault left out is brought level here. A
+ * copy that already holds `body` is left alone, since a backend refuses a log
+ * write that adds no line. The copy can therefore be run again.
  * @param options {object}
  * @param options.serverBackends {ServerBackends}
  * @param options.spaceId {string}
@@ -216,6 +223,10 @@ export async function mirrorCollectionLog({
     collectionId
   })
   if (backend === undefined) {
+    return
+  }
+  const held = await backend.getCollectionLog({ spaceId, collectionId })
+  if (held?.body === body) {
     return
   }
   await backend.writeCollectionLog({ spaceId, collectionId, body })
@@ -619,7 +630,34 @@ export function mirroringControlPlane({
       return result
     },
     async writeCollectionLog(options) {
-      const validator = await backend.writeCollectionLog(options)
+      const { spaceId, collectionId, body } = options
+      let validator: EtagValidator | undefined
+      try {
+        validator = await backend.writeCollectionLog(options)
+      } catch (err) {
+        // A refused write whose body the control plane already stores is the
+        // retry of a write that landed. If its copy faulted, this is the only
+        // request that can bring the copy level before the next append, so
+        // the copy is run again ahead of the refusal.
+        if (
+          err instanceof InvalidRequestBodyError ||
+          err instanceof PreconditionFailedError
+        ) {
+          const stored = await backend.getCollectionLog({
+            spaceId,
+            collectionId
+          })
+          if (stored?.body === body) {
+            await mirrorCollectionLog({
+              serverBackends,
+              spaceId,
+              collectionId,
+              body
+            })
+          }
+        }
+        throw err
+      }
       if (validator !== undefined) {
         await mirrorCollectionLog({
           serverBackends,

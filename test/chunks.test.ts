@@ -611,7 +611,7 @@ describe('Chunk API (chunked-streams)', () => {
       }
     })
 
-    it('an unauthenticated chunk write is rejected (401)', async () => {
+    it('an unauthenticated chunk write is the masked not-found (404)', async () => {
       const resourceId = 'no-auth-write'
       await dataCollection.put(resourceId, { id: resourceId })
 
@@ -620,7 +620,7 @@ describe('Chunk API (chunked-streams)', () => {
         headers: { 'content-type': 'application/octet-stream' },
         body: 'x'
       })
-      assert.equal(response.status, 401)
+      assert.equal(response.status, 404)
     })
   })
 

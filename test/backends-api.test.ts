@@ -193,7 +193,7 @@ describe('Space backend registration (/backends)', () => {
     }
   })
 
-  it('POST without auth headers is unauthorized (401)', async () => {
+  it('POST without auth headers is the masked not-found (404)', async () => {
     const spaceId = await freshSpace('Unauthenticated Space')
     const response = await fetch(
       new URL(`/space/${spaceId}/backends`, baseServerUrl),
@@ -203,7 +203,7 @@ describe('Space backend registration (/backends)', () => {
         body: JSON.stringify(sampleRegistration())
       }
     )
-    assert.equal(response.status, 401)
+    assert.equal(response.status, 404)
   })
 
   it('POST by a non-controller is masked as not-found (404)', async () => {

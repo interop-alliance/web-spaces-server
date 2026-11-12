@@ -80,16 +80,16 @@ describe('Access-control policy API', () => {
     assert.equal(response.status, 200)
   })
 
-  it('anonymous write is still rejected (401) even on a public collection', async () => {
+  it('anonymous write is still rejected (404, masked) even on a public collection', async () => {
     const response = await fetch(new URL(publicResourcePath(), baseServerUrl), {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'anon write' })
     })
-    assert.equal(response.status, 401)
+    assert.equal(response.status, 404)
   })
 
-  it('PublicCanRead does not make collection writes public (anonymous POST 401)', async () => {
+  it('PublicCanRead does not make collection writes public (anonymous POST 404)', async () => {
     const response = await fetch(
       new URL(`/space/${alice.space1.id}/public-credentials/`, baseServerUrl),
       {
@@ -98,7 +98,7 @@ describe('Access-control policy API', () => {
         body: JSON.stringify({ name: 'anon create' })
       }
     )
-    assert.equal(response.status, 401)
+    assert.equal(response.status, 404)
   })
 
   it('an unknown policy type is fail-closed (anonymous GET 404)', async () => {
@@ -177,14 +177,14 @@ describe('Access-control policy API', () => {
     assert.equal(listResponse.status, 200)
   })
 
-  it('reading/writing the policy resource itself requires auth (401)', async () => {
+  it('reading/writing the policy resource itself requires auth (404, masked)', async () => {
     const getResponse = await fetch(
       new URL(
         `/space/${alice.space1.id}/public-credentials/policy`,
         baseServerUrl
       )
     )
-    assert.equal(getResponse.status, 401)
+    assert.equal(getResponse.status, 404)
 
     const deleteResponse = await fetch(
       new URL(
@@ -193,7 +193,7 @@ describe('Access-control policy API', () => {
       ),
       { method: 'DELETE' }
     )
-    assert.equal(deleteResponse.status, 401)
+    assert.equal(deleteResponse.status, 404)
   })
 
   it('the collection linkset advertises the policy resource', async () => {

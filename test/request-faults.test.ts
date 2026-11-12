@@ -69,7 +69,7 @@ describe('request faults', () => {
         status: 200
       },
       { method: 'GET', path: '/service', status: 200 },
-      { method: 'DELETE', path: `${collectionPath}unsigned`, status: 401 }
+      { method: 'DELETE', path: `${collectionPath}unsigned`, status: 404 }
     ])
   })
 

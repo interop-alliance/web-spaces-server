@@ -54,7 +54,8 @@ const BY_ID_MARKER = '<!-- roadmap-order: by-id -->'
 const PRIORITY_RANK = { high: 0, medium: 1, low: 2 }
 const PRIORITY_TAG = { high: 'H', medium: 'M', low: 'L' }
 const BACKEND_CODES = new Set(['fs', 'pg', '*'])
-const EXTERNAL_ID = /\b(?:WASS|WCL|WC|CLI|FW|DCW|WBU|WR|WSR|SC|ECS|PWSCS)-\d+\b/g
+const EXTERNAL_ID =
+  /\b(?:WASS|WCL|WC|CLI|FW|DCW|WBU|WR|WSR|SC|ECS|PWSCS)-\d+\b/g
 const ITEM_HEADING =
   /^### (WSS-\d+):\s*((?:(?:\[[^\]]*\]|\((?:fs|pg|\*)\))\s*)*)(.*)$/
 

@@ -265,9 +265,10 @@ export async function verifyBodyDigest(
   if (!request.headers['content-type']) {
     throw new MissingContentTypeError()
   }
-  // No parsed auth headers: writes require auth (the auth hooks 401 first), so a
-  // bodied request reaching here without `zcap` is a safe method that happens to
-  // carry a body; leave it to the handler's policy decision.
+  // No parsed auth headers: there is no signature to bind the body to. Leave
+  // the request to the handler's authorization, which grants a safe method
+  // only under an access-control policy and refuses an unsafe one as the
+  // masked `not-found`.
   const { zcap } = request
   if (!zcap) {
     return

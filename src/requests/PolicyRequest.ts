@@ -3,9 +3,10 @@
  * `policy` auxiliary resource at the Space, Collection, or Resource level (the
  * level is selected by which path params are present). Reading or modifying a
  * policy is privileged: every operation verifies a capability invocation against
- * the Space controller. The read-method relaxation in auth-header-hooks.ts does
- * not apply here (a policy is controller-managed metadata, not public data);
- * routes.ts installs the strict `requireAuthHeaders` on the GET routes.
+ * the Space controller, and none consults the policy fallback (a policy is
+ * controller-managed metadata, not public data). No hook stands behind that:
+ * a request with no auth headers reaches the handler, and
+ * `fetchSpaceAndVerify` answers it the masked `not-found` (404).
  *
  * A policy is a versioned record (`lib/policyRecord.ts`): a read serves its
  * write stamp members and its `ETag`, a write or delete takes `If-Match` /
