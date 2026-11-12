@@ -92,7 +92,7 @@
     "@eslint/js": "^10.0.1",
     "@interop/did-cli": "^0.18.0",
     "@interop/pws-client": "^0.108.0",
-    "@interop/pws-conformance-suite": "^0.37.0",
+    "@interop/pws-conformance-suite": "^0.38.0",
     "@interop/webkms-client": "^15.0.3",
     "@types/mime-types": "3.0.1",
     "@types/node": "^26.1.2",

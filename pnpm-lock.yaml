@@ -130,8 +130,8 @@ importers:
         specifier: ^0.108.0
         version: 0.108.0(@interop/jsonld-signatures@11.9.0)
       '@interop/pws-conformance-suite':
-        specifier: ^0.37.0
-        version: 0.37.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.108.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
+        specifier: ^0.38.0
+        version: 0.38.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.108.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
       '@interop/webkms-client':
         specifier: ^15.0.3
         version: 15.0.3
@@ -710,12 +710,12 @@ packages:
     resolution: {integrity: sha512-TdFY05siagF8sFSDhb9XzI7M9b0Ozoye9QGy/HKTQswlYs7V/ZAwNS1nnu93ie9hdo4yXxVL4tkgGB2e+khoxQ==}
     engines: {node: '>=24.0'}
 
-  '@interop/pws-conformance-suite@0.37.0':
-    resolution: {integrity: sha512-XnyvQu3vyPexuAfCeHVBAg0Bj6GHuKCZ5Gu9p6wC28Zeslc9XEK81z5KwpS55KbeBW4VydeDELrj1ISPvN0WAQ==}
+  '@interop/pws-conformance-suite@0.38.0':
+    resolution: {integrity: sha512-izZRl4nGNRvSD0q1rxQkeZc0ppQYFbxYTaiF1BqxKzBy9OJ0JJlHp/7tYCEN5n+kwAao74NLoMWyZVGBZ57qiQ==}
     engines: {node: '>=24.0'}
     hasBin: true
     peerDependencies:
-      '@interop/pws-client': '>=0.104.0 <1.0.0'
+      '@interop/pws-client': '>=0.106.0 <1.0.0'
 
   '@interop/security-document-loader@10.1.6':
     resolution: {integrity: sha512-FMWqpj9KYZw29bAl41RBnRXixoJKPvvs3Jup5LEYzSpKfc6bt8ywkAI8F9zmgFmJNlZyzx9LJWm09sM35d8cRA==}
@@ -3622,7 +3622,7 @@ snapshots:
       - expo-crypto
       - react-native-get-random-values
 
-  '@interop/pws-conformance-suite@0.37.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.108.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))':
+  '@interop/pws-conformance-suite@0.38.0(@interop/jsonld-signatures@11.9.0)(@interop/pws-client@0.108.0(@interop/jsonld-signatures@11.9.0))(react-native@0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))':
     dependencies:
       '@digitalcredentials/bnid': 5.0.0(react-native@0.88.1(@babel/core@7.29.13(supports-color@8.1.1))(react@19.3.1)(supports-color@8.1.1))
       '@interop/data-integrity-core': 8.11.0
