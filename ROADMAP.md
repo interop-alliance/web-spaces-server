@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 262
+nextAvailableId: 264
 
 <!-- roadmap-order:index:start -->
 
@@ -176,6 +176,7 @@ Ready:
 
 Ready:
 
+- WSS-263 [M] (*) Revisit the server DID provisioning UX (blocks 1)
 - WSS-11 [L] (*) Space-level `/query`
 - WSS-17 [L] (*) BYOS beyond My-Drive OAuth
 - WSS-69 [L] (*) Drop `Ed25519Signature2020` from the delegation-proof verify
@@ -183,6 +184,12 @@ Ready:
 - WSS-167 [L] (*) Further uses of the server identity (write receipts, epoch
   attestation, delegatee, signed manifest)
 - WSS-185 [L] (*) Several server processes over one store (HLC and origin id)
+
+Chains:
+
+- WSS-263 [M] (*) Revisit the server DID provisioning UX
+  - WSS-262 [L] (*) Restore the server identity log after a data wipe without
+    the admin's wallet (in "Features")
 
 Waiting on another repo:
 
@@ -1343,6 +1350,59 @@ Drive" and "Drive as a CDN" prohibited-use clauses are a genuine gray area for
 BYOS; frame PWS in any OAuth verification as _primary, user-driven storage_
 (never a backup target), and decide whether to seek Google's written consent. A
 legal/policy item, not a technical one.
+
+---
+
+### WSS-262: [L] (*) [after WSS-263] Restore the server identity log after a data wipe without the admin's wallet
+
+- status: todo
+- priority: low
+- backend: *
+- labels: server-identity, deployment, admin
+- discovered-from: the v0.46.0 production deploy (2026-11-12), whose data wipe
+  removed the `server` Space's `did.jsonl` and left exports unsigned until the
+  admin stores the log again by hand
+- blocked-by: WSS-263
+- touches:
+  - `src/lib/serverIdentity.ts` -- the startup provisioning of the `server`
+    Space
+  - `.github/workflows/deploy.yml` and `deploy-staging.yml` -- the `wipe_data`
+    steps
+  - `docs/admin-guide.md` ("Restoring the log after a data wipe"),
+    `docs/server-identity-and-provenance.md`, `docs/deployment-fly.io.md`
+  - `ARCHITECTURE.md`
+- acceptance:
+  - [ ] The mechanism is chosen and signed off before it is coded, any new
+        configuration name included
+  - [ ] After a data wipe and a restart, `/service` advertises the same
+        `serverDid` as before with no `di` command run
+  - [ ] The server still holds no update key and never mints or extends the log
+  - [ ] A restored log is verified as a stored one is: a log that fails
+        verification, or that does not list the export-signing key, is not
+        stored and the boot does not fail on it
+  - [ ] The `id` Collection is public after the restore, as after the manual
+        runbook
+  - [ ] A log the admin appended to since the saved copy is not shortened by the
+        restore
+  - [ ] Tests, and the admin guide's restore section updated
+
+Context: the `server` Space itself is provisioned at startup from
+`WAS_ADMIN_DID`. The log is not, since only the admin's wallet holds its update
+key. Restoring it after a wipe takes three `di` commands signed by the admin
+key: create the `id` Collection, publish it, and `PUT` the wallet's log. The log
+is public and already signed, so storing a saved copy needs no update key.
+
+Candidate mechanisms, none chosen:
+
+- The server reads a saved copy of the log from configuration (a secret or a
+  mounted file) and stores it at startup when the `id` Collection holds none.
+  This is the first write the server makes into the `server` Space's
+  Collections, which today only the admin writes.
+- The deploy workflows' `wipe_data` steps leave `spaces/server` in place on the
+  filesystem backend. The admin guide names this as a convenience. It does not
+  cover a Postgres control plane or a replaced volume.
+- The deploy workflow runs the three `di` commands after the deploy, with the
+  admin key held as an environment secret. This puts the admin key in CI.
 
 ## Multi-primary Spaces
 
@@ -2772,6 +2832,39 @@ grants on the replica; this item enforces it.
 
 Every `draft` item: no actionable done-state yet. A draft states why it is
 parked and gains acceptance criteria when promoted to `todo`.
+
+### WSS-263: [M] (*) [blocks 1] Revisit the server DID provisioning UX
+
+- status: draft (needs design)
+- priority: medium
+- backend: *
+- labels: server-identity, deployment, admin, ux
+- discovered-from: WSS-262 and the v0.46.0 production deploy (2026-11-12)
+- blocks: WSS-262
+- acceptance: none yet -- the operator experience has to be designed first:
+  which steps the server takes on its own, which stay with the admin's wallet,
+  and what a wipe or a new admin key costs the operator
+
+Context: provisioning the server identity takes eight manual steps across two
+tools, and a data wipe undoes the last of them. The server creates the `server`
+Space at startup from `WAS_ADMIN_DID`, and the admin does everything inside it
+with `di`: registers the Space locally, creates and publishes the `id`
+Collection, mints the `did:webvh` around the key `/service` advertises, and
+stores the log. The custody rule behind this is sound: the server holds no
+update key and never mints or extends its own log. The questions are about the
+steps that rule does not require to be manual.
+
+- Whether the server creates and publishes the `id` Collection itself. That
+  would be its first write inside the `server` Space, a policy write and a
+  Collection with no client `createdBy` included.
+- Whether the log survives a wipe or is restored without the wallet, which is
+  WSS-262.
+- What an operator does when the admin key is lost or replaced. Today the stored
+  `server` Space must be removed from the store by hand before the server boots
+  under a new `WAS_ADMIN_DID`.
+- Whether first-time provisioning can be one command, or part of the deploy.
+- How an operator learns the identity is missing. Today it is one startup log
+  line and an absent `serverDid` on `/service`.
 
 ### WSS-241: [L] (*) [after WASS-63] Serve a tail of a Collection's history log
 
