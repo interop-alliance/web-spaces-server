@@ -27,8 +27,6 @@ Ready:
   write
 - WSS-220 [M] (*) A Resource write repairs a Collection copy the data backend
   lost
-- WSS-246 [M] (*) An empty or omitted `custom` on an encrypted Collection is a
-  clearing write
 - WSS-248 [M] (*) Import across backends skips the policy of a Resource it
   skipped
 - WSS-181 [L] (*) Pin that a sidecar imported without timestamps is served with
@@ -517,32 +515,6 @@ plane's Metadata object and writes into a backend holding no copy. The container
 re-check there answers 404 for a Collection that exists, and retrying the
 Resource write never repairs it; only a Collection Metadata write does. The two
 writers of one state recover differently after the same torn write.
-
-### WSS-246: [M] (*) An empty or omitted `custom` on an encrypted Collection is a clearing write
-
-- status: todo
-- priority: medium
-- backend: *
-- labels: encryption, metadata, spec
-- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
-  not reproduced
-- acceptance:
-  - [ ] A Resource `/meta` `PUT` with `custom: {}`, or with no `custom`, on an
-        encrypted Collection clears the member and is not held to the envelope
-        check
-  - [ ] An Update Collection with `custom: {}` on an encrypted Collection does
-        the same
-  - [ ] A non-empty `custom` that is not an envelope is still refused with
-        `encryption-scheme-mismatch` (422)
-  - [ ] A test covers each of the three cases, at both levels
-
-`resolveMetadataCustom` (`src/lib/customMetadata.ts`) hands `custom` to
-`assertEncryptedMetaConforms` whenever the Collection has an encryption scheme.
-An empty object and an absent value both fail `isValidEdvDocument`, so both
-answer 422. The Collection path skips an omitted `custom` before the call
-(`collectionInput.ts`), and nothing skips an empty one. The spec's write
-validation text says an empty or omitted `custom` is a clearing write and is not
-validated. No test sends either body.
 
 ### WSS-248: [M] (*) Import across backends skips the policy of a Resource it skipped
 

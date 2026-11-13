@@ -7,50 +7,31 @@
  */
 import { InvalidRequestBodyError } from '../errors.js'
 import { isPlainObject } from './isPlainObject.js'
-import { assertJsonObjectBody } from './requestBody.js'
 import { assertEncryptedMetaConforms } from './encryption.js'
+import { hasCustomMembers } from './metadataWrite.js'
 import type { CollectionEncryption, ResourceMetadataCustom } from '../types.js'
 
 /**
- * Validates and extracts the user-writable `custom` object from a Metadata
- * update request body on a **plaintext** Collection. The body MUST be a JSON
- * object; any top-level property other than `custom` is ignored (so a client may
- * GET-modify-PUT the whole Metadata object). A missing `custom` clears all
- * user-writable properties (returns `{}`). Throws `InvalidRequestBodyError`
- * (400) when the body or `custom` shape is wrong.
+ * Validates the `{ name, tags }` shape of a non-empty `custom` object on a
+ * plaintext Collection, and returns the members it stores. Throws
+ * `InvalidRequestBodyError` (400) when a member has the wrong type.
  *
- * On an **encrypted** Collection this shape check does not apply -- `custom` is
- * the opaque encryption envelope, validated structurally by
- * `assertEncryptedMetaConforms` instead (a `422` on non-conformance). Both
- * `putMeta` handlers branch on the Collection's `encryption` descriptor after
- * authorization.
+ * On an encrypted Collection this shape check does not apply. A non-empty
+ * `custom` there is the opaque encryption envelope, validated structurally by
+ * `assertEncryptedMetaConforms` instead (a `422` on non-conformance).
+ * `resolveMetadataCustom` picks between the two.
  * @param options {object}
- * @param options.body {unknown}   the parsed request body
+ * @param options.custom {Record<string, unknown>}   the body's `custom` object
  * @param options.requestName {string}   request name for the 400 error title
  * @returns {ResourceMetadataCustom}
  */
-function parseCustomMetadata({
-  body,
+function parsePlaintextCustom({
+  custom,
   requestName
 }: {
-  body: unknown
+  custom: Record<string, unknown>
   requestName: string
 }): ResourceMetadataCustom {
-  const { custom } = assertJsonObjectBody({
-    body,
-    requestName,
-    detail: 'Request body must be a JSON object.'
-  })
-  if (custom === undefined) {
-    return {}
-  }
-  if (!isPlainObject(custom)) {
-    throw new InvalidRequestBodyError({
-      requestName,
-      detail: 'The `custom` property must be a JSON object.',
-      pointer: '/custom'
-    })
-  }
   const { name, tags } = custom
   if (name !== undefined && typeof name !== 'string') {
     throw new InvalidRequestBodyError({
@@ -85,11 +66,20 @@ function parseCustomMetadata({
 }
 
 /**
- * Resolves the `custom` value a Metadata update (`PUT .../meta`) stores,
- * branching on the target Collection's `encryption` descriptor. On an encrypted
- * Collection the `custom` value MUST be a conforming envelope of the scheme
- * (stored opaquely, `422` on a plaintext/malformed value); on a plaintext
- * Collection it MUST be a well-formed `{ name, tags }` object (`400` otherwise).
+ * Resolves the `custom` value a Metadata update (`PUT .../meta`) stores. Any
+ * top-level body property other than `custom` is ignored here, so a client may
+ * GET-modify-PUT the whole Metadata object.
+ *
+ * Two rules hold on every Collection. A `custom` that is present and not a
+ * JSON object is `invalid-request-body` (400, pointer `/custom`). An empty or
+ * omitted `custom` clears the stored annotations (returns `{}`); it is not an
+ * envelope and is not held to the envelope check.
+ *
+ * A non-empty `custom` then branches on the target Collection's `encryption`
+ * descriptor. On an encrypted Collection it MUST be a conforming envelope of
+ * the scheme (stored opaquely, `422` otherwise). On a plaintext Collection it
+ * MUST be a well-formed `{ name, tags }` object (`400` otherwise).
+ *
  * Shared by the Resource-level and Collection-level update handlers, which call
  * it after authorization and the 404-if-missing check, so a 422/400 is
  * observable only to a caller authorized to write the target.
@@ -109,10 +99,20 @@ export function resolveMetadataCustom({
   body: Record<string, unknown>
   requestName: string
 }): ResourceMetadataCustom | Record<string, unknown> {
-  if (collectionMetadata.encryption?.scheme !== undefined) {
-    const { custom } = body
-    assertEncryptedMetaConforms({ collectionMetadata, custom })
-    return custom as Record<string, unknown>
+  const { custom } = body
+  if (custom !== undefined && !isPlainObject(custom)) {
+    throw new InvalidRequestBodyError({
+      requestName,
+      detail: 'The `custom` property must be a JSON object.',
+      pointer: '/custom'
+    })
   }
-  return parseCustomMetadata({ body, requestName })
+  if (!hasCustomMembers(custom)) {
+    return {}
+  }
+  if (collectionMetadata.encryption?.scheme !== undefined) {
+    assertEncryptedMetaConforms({ collectionMetadata, custom })
+    return custom
+  }
+  return parsePlaintextCustom({ custom, requestName })
 }

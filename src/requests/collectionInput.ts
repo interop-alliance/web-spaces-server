@@ -165,8 +165,8 @@ function selectsSameBackend({
  * - `name` and `epoch` are taken from the body alone: omitted means cleared. A create with no `name` gets the Collection
  *   id as its name.
  * - `custom`, when present, is the plaintext `{ name, tags }` object or, on an
- *   encrypted Collection, a conforming envelope (422 otherwise). An omitted
- *   `custom` is the cleared state on either kind of Collection and is never
+ *   encrypted Collection, a conforming envelope (422 otherwise). An empty or
+ *   omitted `custom` is the cleared state on either kind of Collection and is never
  *   judged as an envelope, so a Collection born with no annotations stays
  *   writable without minting one.
  *
@@ -266,24 +266,18 @@ export async function composeCollectionMetadata({
   const revisions =
     governed === undefined ? parsed.revisions : existing?.revisions
 
-  // An omitted `custom` is the cleared state, on an encrypted Collection as
-  // much as on a plaintext one (spec "Lifecycle": clearing the annotations is
-  // a `PUT` carrying an empty `custom` object "or none at all"). It is never
-  // run through the envelope validator, which judges a *present* value and
-  // rejects `undefined` -- absence is not a malformed envelope, it is the
-  // absence of annotations. Checking presence alone, rather than presence on
-  // a create, is what lets an encrypted Collection born with no annotations
-  // be updated afterward: every write would otherwise have to mint an
-  // envelope, which a caller holding no keys (an `epoch` rotation, a rename)
-  // cannot do.
-  const custom =
-    parsed.body.custom === undefined
-      ? undefined
-      : resolveMetadataCustom({
-          collectionMetadata: { encryption },
-          body: parsed.body,
-          requestName
-        })
+  // An empty or omitted `custom` is the cleared state, on an encrypted
+  // Collection as much as on a plaintext one (spec "Lifecycle": clearing the
+  // annotations is a `PUT` carrying an empty `custom` object "or none at
+  // all"). `resolveMetadataCustom` answers `{}` for it without the envelope
+  // check, and the backend stores an empty `custom` as none. A caller holding
+  // no keys (an `epoch` rotation, a rename) can therefore still update an
+  // encrypted Collection.
+  const custom = resolveMetadataCustom({
+    collectionMetadata: { encryption },
+    body: parsed.body,
+    requestName
+  })
 
   // A create with no `name` gets the id; an update with none clears it.
   const name =
@@ -298,8 +292,6 @@ export async function composeCollectionMetadata({
     ...(generator !== undefined && { generator }),
     ...(revisions !== undefined && { revisions }),
     ...(parsed.epoch !== undefined && { epoch: parsed.epoch }),
-    ...(custom !== undefined && {
-      custom: custom as CollectionMetadata['custom']
-    })
+    custom: custom as CollectionMetadata['custom']
   }
 }

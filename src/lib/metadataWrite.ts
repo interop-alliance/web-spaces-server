@@ -42,7 +42,9 @@ import { assertSpaceWritePrecondition } from './preconditions.js'
  * @param custom {unknown}
  * @returns {boolean}
  */
-export function hasCustomMembers(custom: unknown): boolean {
+export function hasCustomMembers(
+  custom: unknown
+): custom is Record<string, unknown> {
   return (
     custom !== undefined &&
     custom !== null &&

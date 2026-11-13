@@ -298,6 +298,73 @@ describe('Encryption enforcement API', () => {
     assert.equal(err.response.status, 412)
   })
 
+  // An empty or omitted `custom` is a clearing write: it is not an envelope
+  // and is not held to the envelope check.
+  for (const [label, json] of [
+    ['an empty', { custom: {} }],
+    ['an omitted', {}]
+  ] as const) {
+    it(`PUT .../meta on an edv Collection clears on ${label} custom`, async () => {
+      const metaUrl = `${baseServerUrl}space/${spaceId}/${edvCollection}/doc-meta/meta`
+      await alice.pws.request({
+        url: metaUrl,
+        method: 'PUT',
+        json: { custom: envelope }
+      })
+      const cleared = await alice.pws.request({
+        url: metaUrl,
+        method: 'PUT',
+        json
+      })
+      assert.equal(cleared.status, 200)
+
+      const read = await alice.pws.request({ url: metaUrl, method: 'GET' })
+      // A cleared `custom` is served as no member at all.
+      assert.ok(!('custom' in read.data))
+    })
+  }
+
+  // A `custom` that is not a JSON object is a body-shape error on an
+  // encrypted Collection as on a plaintext one. It neither clears nor reaches
+  // the envelope check.
+  for (const [label, custom] of [
+    ['a null', null],
+    ['a string', 'labeled'],
+    ['an array', [envelope]]
+  ] as const) {
+    for (const collectionId of [edvCollection, plainCollection]) {
+      it(`PUT .../meta in '${collectionId}' rejects ${label} custom (400)`, async () => {
+        const resourceUrl = `${baseServerUrl}space/${spaceId}/${collectionId}/doc-shape`
+        await alice.pws.request({
+          url: resourceUrl,
+          method: 'PUT',
+          json: collectionId === edvCollection ? envelope : { plain: true }
+        })
+        const err = await rejection(
+          alice.pws.request({
+            url: `${resourceUrl}/meta`,
+            method: 'PUT',
+            json: { custom }
+          })
+        )
+        assert.equal(err.response.status, 400)
+        assert.match(err.data.type, /#invalid-request-body/)
+      })
+    }
+
+    it(`PUT the Collection /meta of an edv Collection rejects ${label} custom (400)`, async () => {
+      const err = await rejection(
+        alice.pws.request({
+          url: `${baseServerUrl}space/${spaceId}/${edvCollection}/meta`,
+          method: 'PUT',
+          json: { encryption: { scheme: 'edv' }, custom }
+        })
+      )
+      assert.equal(err.response.status, 400)
+      assert.match(err.data.type, /#invalid-request-body/)
+    })
+  }
+
   it('a plaintext Collection still accepts a plaintext /meta custom', async () => {
     await alice.pws.request({
       url: `${baseServerUrl}space/${spaceId}/${plainCollection}/plain-meta`,
@@ -331,6 +398,30 @@ describe('Encryption enforcement API', () => {
     assert.equal(err.response.status, 422)
     assert.match(err.data.type, /#encryption-scheme-mismatch/)
   })
+
+  for (const [label, json] of [
+    ['an empty', { encryption: { scheme: 'edv' }, custom: {} }],
+    ['an omitted', { encryption: { scheme: 'edv' } }]
+  ] as const) {
+    it(`PUT the Collection /meta of an edv Collection clears on ${label} custom`, async () => {
+      const metaUrl = `${baseServerUrl}space/${spaceId}/${edvCollection}/meta`
+      await alice.pws.request({
+        url: metaUrl,
+        method: 'PUT',
+        json: { encryption: { scheme: 'edv' }, custom: envelope }
+      })
+      const cleared = await alice.pws.request({
+        url: metaUrl,
+        method: 'PUT',
+        json
+      })
+      assert.equal(cleared.status, 204)
+
+      const read = await alice.pws.request({ url: metaUrl, method: 'GET' })
+      // A cleared `custom` is served as no member at all.
+      assert.ok(!('custom' in read.data))
+    })
+  }
 
   it('PUT the Collection /meta of an edv Collection accepts an envelope custom', async () => {
     const put = await alice.pws.request({

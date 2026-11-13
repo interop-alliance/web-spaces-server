@@ -7670,3 +7670,33 @@ The Export handler (`SpaceRequest.ts`) calls `buildServiceDescription` with
 left out. The spec's Export Space operation requires the entry to be the served
 document. `docs/service-description.md` says the archive carries both members.
 The existing test passes because it boots without an identity.
+
+### WSS-246: [M] (*) An empty or omitted `custom` on an encrypted Collection is a clearing write
+
+- status: done
+- done: 2026-11-13
+- priority: medium
+- backend: *
+- labels: encryption, metadata, spec
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [x] A Resource `/meta` `PUT` with `custom: {}`, or with no `custom`, on an
+        encrypted Collection clears the member and is not held to the envelope
+        check
+  - [x] An Update Collection with `custom: {}` on an encrypted Collection does
+        the same
+  - [x] A non-empty `custom` that is not an envelope is still refused with
+        `encryption-scheme-mismatch` (422)
+  - [x] A test covers each of the three cases, at both levels
+
+`resolveMetadataCustom` (`src/lib/customMetadata.ts`) hands `custom` to
+`assertEncryptedMetaConforms` whenever the Collection has an encryption scheme.
+An empty object and an absent value both fail `isValidEdvDocument`, so both
+answer 422. The Collection path skips an omitted `custom` before the call
+(`collectionInput.ts`), and nothing skips an empty one. The spec's write
+validation text says an empty or omitted `custom` is a clearing write and is not
+validated. No test sends either body.
+
+Implemented 2026-11-13 in `resolveMetadataCustom`, which both levels share. The
+omitted case at the Collection level already cleared, and a test covered it.
