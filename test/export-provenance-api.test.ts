@@ -95,7 +95,7 @@ describe('Export provenance (wire level)', () => {
     assert.equal(archive.manifest.contents['provenance.jsonl'], undefined)
     const warnings = provenanceWarnings().slice(before)
     assert.equal(warnings.length, 1)
-    assert.match(warnings[0]!.reason!, /No server DID lists/)
+    assert.match(warnings[0]!.reason!, /There is no server history log/)
   })
 
   it('signs every object and embeds the served log once the admin publishes one', async () => {

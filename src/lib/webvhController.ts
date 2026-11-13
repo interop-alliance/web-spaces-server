@@ -70,7 +70,7 @@
  * found through the resolver context's `serverBackends`; the control plane
  * `storage` alone locates it and keys the caches.
  */
-import { text } from 'node:stream/consumers'
+import { buffer } from 'node:stream/consumers'
 import { LRUCache } from 'lru-cache'
 import {
   defaultWebvhLogVerifier,
@@ -459,16 +459,21 @@ export function forgetDeletedWebvhLocation({
  * no validator). One read yields both, so the validator recorded on a cache
  * entry is exactly the validator of the log bytes that were verified -- there is no second read for a concurrent rewrite to
  * slip between.
+ *
+ * Only an absent log is a resolution failure. A backend fault (I/O, a
+ * dropped database) that is not a problem already becomes a `StorageError`
+ * (500), so it surfaces as a 5xx and is not masked as an unresolvable
+ * controller.
  * @param options {object}
  * @param options.backend {StorageBackend}   the backend that serves the
  *   log's Collection
  * @param options.spaceId {string}
  * @param options.collectionId {string}
- * @returns {Promise<{ text: string, etag: string | undefined } | undefined>}
+ * @returns {Promise<{ bytes: Buffer, etag: string | undefined } | undefined>}
  *   the raw JSON Lines log and its content `ETag`, or `undefined` when no log
  *   is stored there
  */
-async function readLog({
+export async function readStoredLog({
   backend,
   spaceId,
   collectionId
@@ -476,12 +481,23 @@ async function readLog({
   backend: StorageBackend
   spaceId: string
   collectionId: string
-}): Promise<{ text: string; etag: string | undefined } | undefined> {
-  const result = await readWebvhLogResource({ backend, spaceId, collectionId })
-  if (result === undefined) {
-    return undefined
+}): Promise<{ bytes: Buffer; etag: string | undefined } | undefined> {
+  try {
+    const result = await readWebvhLogResource({
+      backend,
+      spaceId,
+      collectionId
+    })
+    if (result === undefined) {
+      return undefined
+    }
+    return { bytes: await buffer(result.resourceStream), etag: etagOf(result) }
+  } catch (err) {
+    if (!(err instanceof ProblemError)) {
+      throw new StorageError({ cause: err as Error })
+    }
+    throw err
   }
-  return { text: await text(result.resourceStream), etag: etagOf(result) }
 }
 
 /**
@@ -651,29 +667,87 @@ async function resolveVerifiedDocument({
   collectionId,
   selfHosted
 }: WebvhFetchContext): Promise<{ doc: DIDDoc; etag: string | undefined }> {
-  const record = logHeads.for(storage)
   // Taken before the read, so a forget that lands while this resolve is
   // reading or verifying keeps it from recording a head below.
-  const forgets = record.forgets
-  let stored: { text: string; etag: string | undefined } | undefined
-  try {
-    stored = await readLog({ backend, spaceId, collectionId })
-  } catch (err) {
-    // Only an absent log is a resolution failure. A backend fault (I/O, a
-    // dropped database) must surface as a 5xx, not be masked as an
-    // unresolvable controller.
-    if (!(err instanceof ProblemError)) {
-      throw new StorageError({ cause: err as Error })
-    }
-    throw err
-  }
+  const forgets = logHeadForgets({ storage })
+  const stored = await readStoredLog({ backend, spaceId, collectionId })
   if (stored === undefined) {
     throw new Error(
       `No did:webvh history log is published at ` +
         `"${spaceId}/${collectionId}/${WEBVH_LOG_RESOURCE_ID}".`
     )
   }
-  const { text: logText, etag } = stored
+  const { etag } = stored
+  const logText = new TextDecoder().decode(stored.bytes)
+  const { doc } = await verifyStoredLog({
+    storage,
+    did,
+    spaceId,
+    collectionId,
+    selfHosted,
+    logText,
+    forgets
+  })
+  return { doc, etag }
+}
+
+/**
+ * The count of location forgets on the head record of `storage`. A caller
+ * takes it before it reads a log and hands it to {@link verifyStoredLog}, so a
+ * Collection or Space delete that lands while the log is read or verified
+ * keeps that call from recording a head.
+ * @param options {object}
+ * @param options.storage {StorageBackend}   the control plane
+ * @returns {number}
+ */
+export function logHeadForgets({
+  storage
+}: {
+  storage: StorageBackend
+}): number {
+  return logHeads.for(storage).forgets
+}
+
+/**
+ * Verifies the text of a history log read from storage as the current log of
+ * `did`, under the rules the resolver applies to its own read: it must extend
+ * the head recorded for its location and verify
+ * ({@link verifyCurrentLog}). Then records the log's head. The resolver
+ * calls it after its read, and so does the server identity check
+ * (`lib/serverIdentity.ts`), which reads its own log once and judges every
+ * output of that read from the same bytes. Rejects with a plain `Error` when
+ * the log does not verify.
+ *
+ * @param options {object}
+ * @param options.storage {StorageBackend}   the control plane
+ * @param options.did {string}   the DID the log must resolve to
+ * @param options.spaceId {string}   the log's local Space
+ * @param options.collectionId {string}   the log's local Collection
+ * @param options.selfHosted {boolean}   false for a replicated copy of a
+ *   peer-hosted log
+ * @param options.logText {string}   the log, as JSON Lines
+ * @param options.forgets {number}   {@link logHeadForgets}, taken before the
+ *   log was read
+ * @returns {Promise<{ log: DIDLog, doc: DIDDoc }>}
+ */
+export async function verifyStoredLog({
+  storage,
+  did,
+  spaceId,
+  collectionId,
+  selfHosted,
+  logText,
+  forgets
+}: {
+  storage: StorageBackend
+  did: string
+  spaceId: string
+  collectionId: string
+  selfHosted: boolean
+  logText: string
+  forgets: number
+}): Promise<{ log: DIDLog; doc: DIDDoc }> {
+  const record = logHeads.for(storage)
   const { heads } = record
   const key = headKey({ spaceId, collectionId, did, selfHosted })
   const { log, doc } = await verifyCurrentLog({
@@ -689,7 +763,7 @@ async function resolveVerifiedDocument({
   ) {
     heads.set(key, headOf(log))
   }
-  return { doc, etag }
+  return { log, doc }
 }
 
 /**

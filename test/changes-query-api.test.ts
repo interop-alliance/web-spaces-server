@@ -859,7 +859,7 @@ describe('Collection changes query profile', () => {
           body: new TextEncoder().encode(extended),
           headers: { 'content-type': 'text/jsonl', 'if-match': appendedEtag }
         })
-        .catch(err => err.response as Response)
+        .catch((err: any) => err.response as Response)
       assert.equal(resent.status, 400)
       const { data: idle } = await queryChanges(alice, 'kinds-log', {
         limit: 10,

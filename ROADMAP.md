@@ -29,7 +29,6 @@ Ready:
   lost
 - WSS-246 [M] (*) An empty or omitted `custom` on an encrypted Collection is a
   clearing write
-- WSS-247 [M] (*) The export's `service.json` is the document `/service` serves
 - WSS-248 [M] (*) Import across backends skips the policy of a Resource it
   skipped
 - WSS-181 [L] (*) Pin that a sidecar imported without timestamps is served with
@@ -544,28 +543,6 @@ answer 422. The Collection path skips an omitted `custom` before the call
 (`collectionInput.ts`), and nothing skips an empty one. The spec's write
 validation text says an empty or omitted `custom` is a clearing write and is not
 validated. No test sends either body.
-
-### WSS-247: [M] (*) The export's `service.json` is the document `/service` serves
-
-- status: todo
-- priority: medium
-- backend: *
-- labels: export, service-description, server-identity
-- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
-  not reproduced
-- acceptance:
-  - [ ] On a server with an identity, the archive's `service.json` carries
-        `instance.exportSigningMethod` and `serverDid` whenever `/service` does,
-        and is byte-identical to that response
-  - [ ] The export test that compares the two runs with an identity configured
-  - [ ] `docs/service-description.md` and `docs/export-import.md` describe what
-        the archive carries
-
-The Export handler (`SpaceRequest.ts`) calls `buildServiceDescription` with
-`serverUrl`, `originId` and `discloseVersion` only, so the identity members are
-left out. The spec's Export Space operation requires the entry to be the served
-document. `docs/service-description.md` says the archive carries both members.
-The existing test passes because it boots without an identity.
 
 ### WSS-248: [M] (*) Import across backends skips the policy of a Resource it skipped
 

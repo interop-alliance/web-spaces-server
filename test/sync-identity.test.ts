@@ -17,11 +17,7 @@ import { Readable } from 'node:stream'
 import type { FastifyInstance } from 'fastify'
 import { pino } from 'pino'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import {
-  logToJsonlString,
-  readLogFromString,
-  updateDID
-} from '@interop/did-method-webvh'
+import { logToJsonlString, readLogFromString } from '@interop/did-method-webvh'
 import type { DIDLog } from '@interop/did-method-webvh'
 import { collectBytes } from '@interop/space-archive'
 
@@ -37,6 +33,7 @@ import { loadSyncSigner } from '../src/lib/syncIdentity.js'
 import { ServerBackends } from '../src/lib/serverBackends.js'
 import type { IDID } from '../src/types.js'
 import {
+  appendAfterFirstServerLogAccess,
   client,
   delegate,
   importArchive,
@@ -44,7 +41,7 @@ import {
   requestError,
   startTestServer,
   pwsClient,
-  webvhLogSigner,
+  relistServerKey,
   zcapClients
 } from './helpers.js'
 import { mintServerDid, provisionServerIdentity } from '../src/testing.js'
@@ -267,19 +264,24 @@ describe('Sync signer', () => {
    * the log through the front door as the admin.
    */
   async function relistKey(purpose: string[]): Promise<void> {
-    const updated = await updateDID({
+    const { log: next } = await relisted(purpose)
+    await publish(next)
+  }
+
+  /**
+   * The next log version, listing the server key under `purpose`, unpublished,
+   * with the relationships its resolved current document lists the key under,
+   * read the way the server reads them.
+   */
+  async function relisted(
+    purpose: string[]
+  ): Promise<{ log: DIDLog; listedUnder: string[] }> {
+    return await relistServerKey({
       log,
-      signer: webvhLogSigner({ keyPair: adminKeyPair }),
-      vmIdFragment: 'multibase',
-      verificationMethods: [
-        {
-          type: 'Multikey',
-          publicKeyMultibase: signingKey.keyPair.publicKeyMultibase,
-          purpose
-        }
-      ] as any
+      adminKeyPair,
+      publicKeyMultibase: signingKey.keyPair.publicKeyMultibase!,
+      purpose
     })
-    await publish(updated.log)
   }
 
   async function publish(next: DIDLog): Promise<void> {
@@ -427,23 +429,82 @@ describe('Sync signer', () => {
     await relistKey(['assertionMethod', 'capabilityInvocation'])
     const getResource = fastify.storage.getResource.bind(fastify.storage)
     let reads = 0
-    // The first read is the head lookup, the second the log verification.
+    // The log changed, so the one content read is the identity check's.
     const spy = vi
       .spyOn(fastify.storage, 'getResource')
       .mockImplementation(async options => {
         reads++
-        if (reads === 2) {
+        if (reads === 1) {
           throw new Error('disk fault')
         }
         return await getResource(options)
       })
     try {
       await assert.rejects(load(), (err: any) => err.statusCode === 500)
-      assert.equal(reads, 2)
+      assert.equal(reads, 1)
     } finally {
       spy.mockRestore()
     }
     const loaded = await load()
     assert.ok('signer' in loaded)
+  })
+
+  it('is refused naming the missing serverDid once the log drops assertionMethod, after a call that yielded a signer', async () => {
+    await relistKey(['assertionMethod', 'capabilityInvocation'])
+    const before = await load()
+    assert.ok('signer' in before, JSON.stringify(before))
+
+    // `updateDID` replaces the relationships with the ones it is given, so
+    // the next version lists the key under capabilityInvocation alone.
+    const next = await relisted(['capabilityInvocation'])
+    assert.deepStrictEqual(next.listedUnder, ['capabilityInvocation'])
+    await publish(next.log)
+
+    const after = await load()
+    assert.ok('refusal' in after, JSON.stringify(after))
+    assert.equal(after.refusal, 'no-server-did')
+    assert.match(after.reason, /advertises no serverDid/)
+  })
+
+  it('judges serverDid and capabilityInvocation from one log version, even when the log changes mid-call', async () => {
+    // Version A lists the key under assertionMethod alone: a serverDid and
+    // no signer. The call reads it and records its outcome.
+    const listed = await relisted(['assertionMethod'])
+    assert.deepStrictEqual(listed.listedUnder, ['assertionMethod'])
+    await publish(listed.log)
+    const warm = await load()
+    assert.ok('refusal' in warm, JSON.stringify(warm))
+    assert.equal(warm.refusal, 'no-capability-invocation')
+
+    // Version B lists it under capabilityInvocation alone: no serverDid. A
+    // serverDid judged from A paired with B's document would yield a signer
+    // that neither version yields on its own.
+    const next = await relisted(['capabilityInvocation'])
+    assert.deepStrictEqual(next.listedUnder, ['capabilityInvocation'])
+
+    // The call's first access to the server log, a metadata read or a
+    // content read, completes; then B lands through the front door, which
+    // also drops any document the resolver cached for the DID. Every later
+    // access sees B.
+    const spied = appendAfterFirstServerLogAccess({
+      backend,
+      append: async () => await publish(next.log)
+    })
+
+    let loaded: Awaited<ReturnType<typeof load>>
+    try {
+      loaded = await load()
+    } finally {
+      spied.restore()
+    }
+
+    // Both decisions came from the one access: version A's.
+    assert.equal(spied.accesses(), 1)
+    assert.ok('refusal' in loaded, JSON.stringify(loaded))
+    assert.equal(loaded.refusal, 'no-capability-invocation')
+    // The next call judges B alone.
+    const after = await load()
+    assert.ok('refusal' in after, JSON.stringify(after))
+    assert.equal(after.refusal, 'no-server-did')
   })
 })

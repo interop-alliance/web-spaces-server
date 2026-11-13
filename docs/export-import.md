@@ -37,11 +37,25 @@ entry). They are descriptive: the import walk classifies entries by path and
 never reads them, so an archive written before this change, which carries the
 rendered document's `w3c-ccg.github.io` host, imports unchanged.
 
-The Export Space handler passes this server's Service Description to
-`exportSpace`. The codec writes it into the archive verbatim as its
-`service.json` entry beside `manifest.yml`, so an importer can read which
-specification versions and feature set the contents were written under before it
-writes anything. It is informational, and `importTar.ts` ignores it.
+The Export Space handler passes the codec the Service Description that
+`/service` serves. Both build it with `servedServiceDescription`. The codec
+serializes it as compact JSON, as the route does, and writes it as the
+`service.json` entry beside `manifest.yml`. The entry is therefore
+byte-identical to the `/service` body at the time of the export. On a server
+with an identity it carries the core entry's `serverDid` and
+`instance.exportSigningMethod` whenever `/service` does. An importer can read
+which specification versions and feature set the contents were written under,
+and by which server, before it writes anything. It is informational, and
+`importTar.ts` ignores it.
+
+The export reads the server history log once. `loadExportAttestor` judges that
+read's bytes under the rule `/service` uses, and hands the handler the
+`serverDid` it decided along with the attestor or the reason there is none. The
+handler passes that `serverDid` to `servedServiceDescription`. So the
+`service.json` entry and the `did.jsonl` snapshot always come from one log
+version, even when the admin appends to the log during the export. A snapshot
+whose document lists the key under an id other than
+`{serverDid}#{publicKeyMultibase}` still yields a `serverDid` but no attestor.
 
 When the handler has an export attestor (the server has an identity), the
 backend also passes the codec the `provenance.jsonl` statements that

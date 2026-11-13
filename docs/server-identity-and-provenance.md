@@ -17,11 +17,12 @@ update key of the server's `did:webvh` history log. The server therefore never
 mints or extends its own log, and a compromised server cannot take the DID over.
 
 The DID is the self-hosted `did:webvh:{scid}:{host}:space:server:id`. Its log is
-the `did.jsonl` Resource of the `id` Collection in the `server` Space. It
-resolves through the same `webvhController.ts` path as any Space controller, so
-the log gets the fast-forward and verify-on-append rules and the document cache
-with no code of its own. See [webvh-controllers.md](webvh-controllers.md) for
-those rules.
+the `did.jsonl` Resource of the `id` Collection in the `server` Space. It is
+written under the same rules as any Space controller's log, fast-forward and
+verify-on-append. See [webvh-controllers.md](webvh-controllers.md) for those
+rules. The identity check reads the log itself and verifies those bytes with the
+resolver's own step (`verifyStoredLog` in `webvhController.ts`), the recorded
+head included. It does not use the resolver's document cache.
 
 The same seed key also signs sync invocations once the log lists it under
 `capabilityInvocation`. That signer is described in
@@ -50,10 +51,21 @@ is what restores it.
 
 ## Resolving the server DID
 
-`resolveServerDid` reads the log's head for the DID, checks it is hosted at
-`server/id` of this server, resolves it, and requires the signing key to be
-listed under `assertionMethod`. It reads every method that carries the key and
-any method embedded in a relationship.
+`readServerIdentity` reads the log once and judges that read's bytes. The log's
+head must name a DID hosted at `server/id` of this server. The log must verify
+as that DID's current log under the resolver's own step (`verifyStoredLog` in
+`lib/webvhController.ts`). That step refuses a log that does not extend the head
+this server last verified, and a deactivated DID, and records the new head. The
+signing key must be listed under `assertionMethod`. The check reads every method
+that carries the key and any method embedded in a relationship.
+`resolveServerIdentity` memoizes that outcome on the log's `ETag`: the DID with
+the resolved document it was judged from. A call while the log stands still
+costs one metadata read. A memoized outcome is honored for
+`WEBVH_DOCUMENT_REVERIFY_AGE` at most, after which the log is read and judged
+again, so bytes rewritten under an unchanged `ETag` are noticed within that age.
+`/service` reads the DID through `resolveServerDid`, a wrapper over it. The sync
+signer reads the DID and the document together, so its `serverDid` and its
+`capabilityInvocation` check come from one log version.
 
 The key may also be listed under `capabilityInvocation`, which is how the admin
 enables replication. It may not be listed under `capabilityDelegation`,
@@ -68,8 +80,13 @@ the result as `exportSigningMethod` (under `instance`) and `serverDid` (on the
 core `specs` entry).
 
 A log that is absent, does not verify, or lists the key otherwise leaves
-`serverDid` off `/service` with a `warn` line, logged once per log version
-rather than per request. The server signs nothing in that case.
+`serverDid` off `/service` with a `warn` line, logged once per log version and
+reason and not once per request. The server signs nothing in that case.
+
+A read can fall behind a concurrent append: another reader verifies the longer
+log and records its head, and the earlier read no longer extends that head.
+`readServerIdentity` therefore reads once more when a read is refused and the
+log's `ETag` has changed since, and judges the second read alone.
 
 ## The provenance statement
 
@@ -95,11 +112,14 @@ a statement.
 ## Signing on export
 
 `loadExportAttestor` in `lib/exportProvenance.ts` runs once per Export Space
-request. It takes the server DID from `resolveServerDid`, reads the log's bytes
-as the log Resource serves them, and checks that snapshot on its own terms. Its
-head names the same DID, it verifies as that DID's log, and its document lists
-the seed key as the method `{serverDid}#{publicKeyMultibase}`, under
-`assertionMethod` and at most `capabilityInvocation`.
+request. It reads the log once, through `readServerIdentity`, and that read's
+bytes are the snapshot the archive embeds. The server DID is judged from them
+under the `/service` rule. The snapshot's document must also list the seed key
+as the method `{serverDid}#{publicKeyMultibase}`. It hands back the server DID
+with the attestor, and the handler puts that DID in the archive's
+`service.json`. A log appended during the export therefore cannot leave
+`service.json` and the snapshot on different log versions. A document that lists
+the key under another id still yields a `serverDid` but no provenance.
 
 With no identity the handler logs one `warn` line naming the reason and the
 export carries no provenance. With one, the backend's `exportSpace` hands its

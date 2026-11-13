@@ -35,8 +35,15 @@ server's own self-hosted `did:webvh`. A controller delegates the replication
 pull capability to that DID, so a client gates on it. Both members sit on the
 core entry rather than on `instance` because the spec forbids a client gating on
 `instance`. `serverDid` is present only under the rule in
-[The instance member](#the-instance-member). The archive's `service.json`
-carries both.
+[The instance member](#the-instance-member).
+
+An export archive's `service.json` is the document `/service` serves, byte for
+byte. Both are built by `servedServiceDescription` from the same server
+instance. So the entry carries `serverDid` and `instance.exportSigningMethod`
+whenever `/service` does, and neither when it does not. The export decides
+`serverDid` under the same rule, from the one read of the server history log
+that also yields its provenance snapshot (see
+[export-import.md](export-import.md)).
 
 A Backend descriptor advertises no tokens of its own. Conditional writes, the
 `epoch` stamp, and the `writerId` writer-attribution label are baseline

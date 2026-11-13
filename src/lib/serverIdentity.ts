@@ -13,24 +13,28 @@
  * once the resolved current document lists the key. Until then it signs
  * nothing.
  *
- * Resolution goes through the same self-hosted `did:webvh` resolver every
- * Space controller goes through (`webvhController.ts`), so the log gets the
- * fast-forward and verify-on-append rules and the document cache for free.
+ * The log is written through the same `did.jsonl` rules every self-hosted
+ * `did:webvh` gets: fast-forward and verify-on-append. It is read once per
+ * check, and the check judges that read's bytes under the resolver's own
+ * verification step (`verifyStoredLog` in `webvhController.ts`), the recorded
+ * head included. Export Space takes the DID it puts in `service.json` and the
+ * log snapshot it signs under from that one read, so the two cannot come from
+ * different log versions.
  */
-import { buffer } from 'node:stream/consumers'
 import type { FastifyBaseLogger } from 'fastify'
 import { readLogFromString } from '@interop/did-method-webvh'
-import type { DIDDoc } from '@interop/did-method-webvh'
+import type { DIDDoc, DIDLog } from '@interop/did-method-webvh'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import {
-  CountQuotaExceededError,
-  PreconditionFailedError,
-  isServerFault
-} from '../errors.js'
+import { CountQuotaExceededError, PreconditionFailedError } from '../errors.js'
+import { WEBVH_DOCUMENT_REVERIFY_AGE } from '../config.default.js'
 import { backendScoped } from './backendCache.js'
 import { etagOf } from './etag.js'
-import { logDid, resolveWebvhController } from './webvhController.js'
-import { readWebvhLogResource } from './webvhLogLocation.js'
+import {
+  logDid,
+  logHeadForgets,
+  readStoredLog,
+  verifyStoredLog
+} from './webvhController.js'
 import type { ServerBackends } from './serverBackends.js'
 import {
   AUXILIARY_SPACE_TYPE,
@@ -237,15 +241,64 @@ export async function provisionServerSpace({
 }
 
 /**
- * The last outcome of {@link resolveServerDid} per backend, keyed on the
+ * What {@link judgeServerLog} decides from one read of the log: the server
+ * DID with the parsed log and the resolved document, or the reason there is
+ * none.
+ */
+type JudgedServerLog =
+  | { serverDid: string; log: DIDLog; doc: DIDDoc }
+  | { reason: string; warning?: Record<string, unknown> }
+
+/**
+ * What every read of the server identity takes: the control plane, the set it
+ * is the control plane of (the log is read from the backend that serves its
+ * Collection), the server URL, the export-signing key, and the logger the
+ * identity check's warnings go to.
+ */
+export interface ServerIdentityContext {
+  storage: StorageBackend
+  serverBackends: ServerBackends
+  serverUrl: string
+  signingKey: ServerSigningKey
+  logger: FastifyBaseLogger
+}
+
+/**
+ * The outcome of {@link readServerIdentity}: the server DID with the bytes,
+ * the parsed log and the resolved document it was judged from, or the reason
+ * there is none.
+ */
+export type ServerIdentityRead =
+  | { serverDid: string; logBytes: Buffer; log: DIDLog; doc: DIDDoc }
+  | { reason: string }
+
+/**
+ * The reason {@link readServerIdentity} gives when no log is stored.
+ */
+const NO_LOG_REASON = 'There is no server history log.'
+
+/**
+ * The last outcome of {@link readServerIdentity} per backend, keyed on the
  * validator of the log it was read from: `logEtag` is the log Resource's
- * `ETag`, or `undefined` when there was no log. Any write to the log changes
- * the validator, so a hit is exactly a read of the same bytes; a miss re-reads
- * and re-warns, so each operator problem is logged once per log version
- * rather than once per `/service` request.
+ * `ETag`, or `undefined` when there was no log. `identity` is the server DID
+ * and the resolved document it was judged from, or
+ * `undefined` when the log yields no DID, in which case `reason` says why.
+ * `judgedAt` is the `performance.now()` of the judgment.
+ *
+ * Any write to the log changes the validator, so a hit is a read of the same
+ * bytes unless they were rewritten out of band. A hit is therefore honored
+ * only while the judgment is younger than `WEBVH_DOCUMENT_REVERIFY_AGE`, the
+ * same bound the resolver's document cache keeps. A miss re-reads. An
+ * operator problem is logged once per log version and reason, not once per
+ * `/service` request.
  */
 const serverDidMemo = backendScoped<{
-  entry?: { logEtag: string | undefined; did: string | undefined }
+  entry?: {
+    logEtag: string | undefined
+    identity: { serverDid: string; doc: DIDDoc } | undefined
+    reason: string | undefined
+    judgedAt: number
+  }
 }>(() => ({}))
 
 /**
@@ -257,146 +310,400 @@ const serverDidMemo = backendScoped<{
  * `undefined` otherwise: the log is absent, does not parse, names a DID not
  * hosted at `server/id` of this server, fails verification, or lists the key
  * wrongly. The reason is logged at `warn`, since each is an operator matter.
+ * The rule is {@link readServerIdentity}'s.
  *
- * Read per `/service` request. The outcome is memoized per control plane on
- * the log Resource's `ETag` ({@link serverDidMemo}), so a request costs one
- * metadata read of the log while the log stands still (plus the read that
- * finds the log's backend in a set of several), and the log is parsed and
- * the document resolved only when it has changed.
+ * Read per `/service` request, through the memo {@link resolveServerIdentity}
+ * describes, so a request costs one metadata read of the log while the log
+ * stands still.
  *
- * @param options {object}
- * @param options.storage {StorageBackend}   the control plane
- * @param options.serverBackends {ServerBackends}   the set `storage` is the
- *   control plane of; the log is read from the backend that serves its
- *   Collection
- * @param options.serverUrl {string}
- * @param options.signingKey {ServerSigningKey}
- * @param options.logger {FastifyBaseLogger}
+ * @param options {ServerIdentityContext}
  * @returns {Promise<string | undefined>}
  */
-export async function resolveServerDid({
+export async function resolveServerDid(
+  options: ServerIdentityContext
+): Promise<string | undefined> {
+  const identity = await memoizedServerIdentity(options)
+  return identity?.serverDid
+}
+
+/**
+ * The server's DID together with the resolved current document it was judged
+ * from, under the rule {@link resolveServerDid} states. Returns `undefined`
+ * when the log yields no DID. The sync signer reads both from here, so the
+ * DID it signs as and the `capabilityInvocation` listing it checks come from
+ * one log version. The document is the caller's own copy.
+ *
+ * The outcome is memoized per control plane on the log Resource's `ETag`
+ * ({@link serverDidMemo}). A call costs one metadata read of the log while
+ * the log stands still (plus the read that finds the log's backend in a set
+ * of several). The log is read, parsed and its document resolved when it has
+ * changed, or when the memoized judgment has reached
+ * `WEBVH_DOCUMENT_REVERIFY_AGE`, by the read {@link readServerIdentity}
+ * makes, which records the new outcome.
+ *
+ * @param options {ServerIdentityContext}
+ * @returns {Promise<{ serverDid: string, doc: DIDDoc } | undefined>}
+ */
+export async function resolveServerIdentity(
+  options: ServerIdentityContext
+): Promise<{ serverDid: string; doc: DIDDoc } | undefined> {
+  const identity = await memoizedServerIdentity(options)
+  if (identity === undefined) {
+    return undefined
+  }
+  // The memo keeps its document for the life of a log version, and the read
+  // that judged it hands the same object out, so this caller gets a copy.
+  return { serverDid: identity.serverDid, doc: structuredClone(identity.doc) }
+}
+
+/**
+ * The memoized half of {@link resolveServerIdentity}. The document it returns
+ * may be the memo's own, so it stays inside this module.
+ *
+ * @param options {ServerIdentityContext}
+ * @returns {Promise<{ serverDid: string, doc: DIDDoc } | undefined>}
+ */
+async function memoizedServerIdentity({
   storage,
   serverBackends,
   serverUrl,
   signingKey,
   logger
-}: {
-  storage: StorageBackend
-  serverBackends: ServerBackends
-  serverUrl: string
-  signingKey: ServerSigningKey
-  logger: FastifyBaseLogger
-}): Promise<string | undefined> {
+}: ServerIdentityContext): Promise<
+  { serverDid: string; doc: DIDDoc } | undefined
+> {
   const memo = serverDidMemo.for(storage)
   const backend = await serverLogBackend({ serverBackends })
-  const metadata = await backend.getResourceMetadata({
-    spaceId: SERVER_SPACE_ID,
-    collectionId: SERVER_IDENTITY_COLLECTION_ID,
-    resourceId: WEBVH_LOG_RESOURCE_ID
-  })
+  const metadata = await serverLogMetadata({ backend })
   if (metadata === undefined) {
-    memo.entry = { logEtag: undefined, did: undefined }
+    memo.entry = noLogEntry()
     return undefined
   }
   const logEtag = etagOf(metadata)
+  const { entry } = memo
   if (
     logEtag !== undefined &&
-    memo.entry !== undefined &&
-    memo.entry.logEtag === logEtag
+    entry !== undefined &&
+    entry.logEtag === logEtag &&
+    performance.now() - entry.judgedAt < WEBVH_DOCUMENT_REVERIFY_AGE
   ) {
-    return memo.entry.did
+    return entry.identity
   }
-  const did = await resolveServerDidUncached({
+  const read = await readIdentityFrom({
     storage,
-    serverBackends,
     backend,
     serverUrl,
     signingKey,
     logger
   })
-  // A log with no validator cannot be told apart from its next version, so
-  // its outcome is not memoized.
-  if (logEtag !== undefined) {
-    memo.entry = { logEtag, did }
-  }
-  return did
+  return 'serverDid' in read ? read : undefined
 }
 
 /**
- * The uncached body of {@link resolveServerDid}: reads and checks the stored
- * log as it stands now.
+ * Reads the server history log once and judges the server's DID from that
+ * read's bytes alone ({@link judgeServerLog}, the rule `/service` advertises
+ * `serverDid` under). Returns the DID with the bytes, the parsed log and the
+ * resolved document it was judged from, or the reason there is none. Export
+ * Space calls it directly, so the `serverDid` its `service.json` carries and
+ * the log snapshot it signs under come from one log version.
+ * The returned document is the one the memo keeps, so a caller only reads it.
+ *
+ * A refused read is made once more when the log has changed since. A read
+ * that fell behind a concurrent append does not extend the head another
+ * reader recorded meanwhile, and that says nothing about the stored log. The
+ * second read is judged alone, the same way.
+ *
+ * Records the outcome, the DID with its document, in {@link serverDidMemo}
+ * under the `ETag` of that same read, which is what
+ * {@link resolveServerIdentity} checks before it reads again.
+ * A reason that is an operator matter is logged at `warn` once per log
+ * version and reason: not again when the memo already holds both.
+ *
+ * @param options {ServerIdentityContext}
+ * @returns {Promise<ServerIdentityRead>}
+ */
+export async function readServerIdentity({
+  storage,
+  serverBackends,
+  serverUrl,
+  signingKey,
+  logger
+}: ServerIdentityContext): Promise<ServerIdentityRead> {
+  const backend = await serverLogBackend({ serverBackends })
+  return await readIdentityFrom({
+    storage,
+    backend,
+    serverUrl,
+    signingKey,
+    logger
+  })
+}
+
+/**
+ * {@link readServerIdentity}, given the backend that serves the log's
+ * Collection.
+ *
  * @param options {object}
- * @param options.storage {StorageBackend}
- * @param options.serverBackends {ServerBackends}
- * @param options.backend {StorageBackend}   the backend that serves the
- *   server log's Collection
+ * @param options.storage {StorageBackend}   the control plane
+ * @param options.backend {StorageBackend}   the backend that serves the log's
+ *   Collection
  * @param options.serverUrl {string}
  * @param options.signingKey {ServerSigningKey}
  * @param options.logger {FastifyBaseLogger}
- * @returns {Promise<string | undefined>}
+ * @returns {Promise<ServerIdentityRead>}
  */
-async function resolveServerDidUncached({
+async function readIdentityFrom({
   storage,
-  serverBackends,
   backend,
   serverUrl,
   signingKey,
   logger
+}: Omit<ServerIdentityContext, 'serverBackends'> & {
+  backend: StorageBackend
+}): Promise<ServerIdentityRead> {
+  const memo = serverDidMemo.for(storage)
+  // The outcome is recorded only over the entry this call started from. A
+  // slower call that read an older version must not replace what a faster
+  // one recorded for a newer version.
+  const before = memo.entry
+  const judgeRead = { storage, backend, serverUrl, signingKey }
+  let read = await readAndJudgeServerLog(judgeRead)
+  if (
+    read !== undefined &&
+    'reason' in read.judged &&
+    (await serverLogChanged({ backend, logEtag: read.logEtag }))
+  ) {
+    read = await readAndJudgeServerLog(judgeRead)
+  }
+  if (read === undefined) {
+    if (memo.entry === before) {
+      memo.entry = noLogEntry()
+    }
+    return { reason: NO_LOG_REASON }
+  }
+  const { logEtag, logBytes, judged } = read
+  const reason = 'reason' in judged ? judged.reason : undefined
+  const logged =
+    logEtag !== undefined &&
+    memo.entry?.logEtag === logEtag &&
+    memo.entry.reason === reason
+  if ('warning' in judged && judged.warning !== undefined && !logged) {
+    logger.warn(judged.warning, judged.reason)
+  }
+  // A log with no validator cannot be told apart from its next version, so
+  // its outcome is not memoized.
+  if (logEtag !== undefined && memo.entry === before) {
+    memo.entry = {
+      logEtag,
+      identity:
+        'serverDid' in judged
+          ? { serverDid: judged.serverDid, doc: judged.doc }
+          : undefined,
+      reason,
+      judgedAt: performance.now()
+    }
+  }
+  if ('serverDid' in judged) {
+    return { ...judged, logBytes }
+  }
+  return { reason: judged.reason }
+}
+
+/**
+ * One read of the server history log and the judgment of that read's bytes,
+ * or `undefined` when no log is stored.
+ *
+ * @param options {object}
+ * @param options.storage {StorageBackend}   the control plane
+ * @param options.backend {StorageBackend}   the backend that serves the log's
+ *   Collection
+ * @param options.serverUrl {string}
+ * @param options.signingKey {ServerSigningKey}
+ * @returns {Promise<{ logEtag: string | undefined, logBytes: Buffer,
+ *   judged: JudgedServerLog } | undefined>}
+ */
+async function readAndJudgeServerLog({
+  storage,
+  backend,
+  serverUrl,
+  signingKey
 }: {
   storage: StorageBackend
-  serverBackends: ServerBackends
   backend: StorageBackend
   serverUrl: string
   signingKey: ServerSigningKey
-  logger: FastifyBaseLogger
-}): Promise<string | undefined> {
-  const did = await readHeadDid({ backend })
-  if (did === undefined) {
+}): Promise<
+  | { logEtag: string | undefined; logBytes: Buffer; judged: JudgedServerLog }
+  | undefined
+> {
+  // Taken before the read, as the resolver takes it (see `verifyStoredLog`).
+  const forgets = logHeadForgets({ storage })
+  const stored = await readStoredLog({
+    backend,
+    spaceId: SERVER_SPACE_ID,
+    collectionId: SERVER_IDENTITY_COLLECTION_ID
+  })
+  if (stored === undefined) {
     return undefined
+  }
+  const { bytes: logBytes, etag: logEtag } = stored
+  const judged = await judgeServerLog({
+    storage,
+    logBytes,
+    forgets,
+    serverUrl,
+    signingKey
+  })
+  return { logEtag, logBytes, judged }
+}
+
+/**
+ * Whether the stored server history log is no longer the version read under
+ * `logEtag`: its validator differs, or the log is gone. A read with no
+ * validator cannot be compared and counts as unchanged.
+ *
+ * @param options {object}
+ * @param options.backend {StorageBackend}   the backend that serves the log's
+ *   Collection
+ * @param [options.logEtag] {string}   the validator of the read
+ * @returns {Promise<boolean>}
+ */
+async function serverLogChanged({
+  backend,
+  logEtag
+}: {
+  backend: StorageBackend
+  logEtag: string | undefined
+}): Promise<boolean> {
+  if (logEtag === undefined) {
+    return false
+  }
+  const metadata = await serverLogMetadata({ backend })
+  return metadata === undefined || etagOf(metadata) !== logEtag
+}
+
+/**
+ * The server history log Resource's metadata, or `undefined` when no log is
+ * stored. Its `ETag` is the validator the memo is keyed on.
+ * @param options {object}
+ * @param options.backend {StorageBackend}   the backend that serves the log's
+ *   Collection
+ * @returns {ReturnType<StorageBackend['getResourceMetadata']>}
+ */
+async function serverLogMetadata({
+  backend
+}: {
+  backend: StorageBackend
+}): ReturnType<StorageBackend['getResourceMetadata']> {
+  return await backend.getResourceMetadata({
+    spaceId: SERVER_SPACE_ID,
+    collectionId: SERVER_IDENTITY_COLLECTION_ID,
+    resourceId: WEBVH_LOG_RESOURCE_ID
+  })
+}
+
+/**
+ * The memo entry that records that no server history log is stored.
+ * @returns {object}
+ */
+function noLogEntry(): {
+  logEtag: undefined
+  identity: undefined
+  reason: string
+  judgedAt: number
+} {
+  return {
+    logEtag: undefined,
+    identity: undefined,
+    reason: NO_LOG_REASON,
+    judgedAt: performance.now()
+  }
+}
+
+/**
+ * The rule that decides the server's DID from the bytes of its history log.
+ * The log's head must name a DID hosted at `server/id` of this server. The
+ * log must verify as that DID's current log, under the resolver's own step
+ * (`verifyStoredLog`): it extends the head this server last verified and is
+ * not deactivated. Its document must list the export-signing key the way
+ * {@link signingKeyRelationshipProblem} requires.
+ *
+ * A refusal carries a `reason`. When the reason is an operator matter it also
+ * carries `warning`, the bindings to log it with. A log that does not parse
+ * or names no DID carries none.
+ *
+ * @param options {object}
+ * @param options.storage {StorageBackend}   the control plane, which keys the
+ *   recorded log heads
+ * @param options.logBytes {Buffer}   the log, as the log Resource serves it
+ * @param options.forgets {number}   `logHeadForgets`, taken before the read
+ * @param options.serverUrl {string}
+ * @param options.signingKey {ServerSigningKey}
+ * @returns {Promise<JudgedServerLog>}
+ */
+async function judgeServerLog({
+  storage,
+  logBytes,
+  forgets,
+  serverUrl,
+  signingKey
+}: {
+  storage: StorageBackend
+  logBytes: Buffer
+  forgets: number
+  serverUrl: string
+  signingKey: ServerSigningKey
+}): Promise<JudgedServerLog> {
+  const logText = logBytes.toString('utf8')
+  let did: string | undefined
+  try {
+    did = logDid(readLogFromString(logText))
+  } catch {
+    did = undefined
+  }
+  if (did === undefined) {
+    return { reason: 'The server history log names no DID.' }
   }
   const parsed = parseSelfHostedWebvh(did, { serverUrl })
   if (parsed === undefined || !isServerIdentityPath(parsed)) {
-    logger.warn(
-      { did },
-      'The stored server history log names a DID not hosted at ' +
+    return {
+      reason:
+        'The stored server history log names a DID not hosted at ' +
         `${SERVER_SPACE_ID}/${SERVER_IDENTITY_COLLECTION_ID} of this server; ` +
-        'the server identity is not advertised.'
-    )
-    return undefined
+        'the server identity is not advertised.',
+      warning: { did }
+    }
   }
-  let doc: DIDDoc
+  let verified: { log: DIDLog; doc: DIDDoc }
   try {
-    doc = await resolveWebvhController({
+    verified = await verifyStoredLog({
       storage,
-      serverBackends,
-      serverUrl,
-      did
+      did,
+      spaceId: parsed.spaceId,
+      collectionId: parsed.collectionId,
+      selfHosted: true,
+      logText,
+      forgets
     })
   } catch (err) {
-    // A storage fault says nothing about the log. It keeps its 5xx, and no
-    // outcome is memoized for it.
-    if (isServerFault(err)) {
-      throw err
+    return {
+      reason:
+        'The server history log does not verify; the server identity is not ' +
+        'advertised.',
+      warning: { err, did }
     }
-    logger.warn(
-      { err, did },
-      'The server history log does not verify; the server identity is not ' +
-        'advertised.'
-    )
-    return undefined
   }
   const problem = signingKeyRelationshipProblem({
-    doc,
+    doc: verified.doc,
     publicKeyMultibase: signingKey.keyPair.publicKeyMultibase
   })
   if (problem !== undefined) {
-    logger.warn(
-      { did, exportSigningMethod: signingKey.exportSigningMethod },
-      `${problem} The server identity is not advertised.`
-    )
-    return undefined
+    return {
+      reason: `${problem} The server identity is not advertised.`,
+      warning: { did, exportSigningMethod: signingKey.exportSigningMethod }
+    }
   }
-  return did
+  return { serverDid: did, ...verified }
 }
 
 /**
@@ -405,7 +712,7 @@ async function resolveServerDidUncached({
  * @param options.serverBackends {ServerBackends}
  * @returns {Promise<StorageBackend>}
  */
-export async function serverLogBackend({
+async function serverLogBackend({
   serverBackends
 }: {
   serverBackends: ServerBackends
@@ -414,51 +721,6 @@ export async function serverLogBackend({
     spaceId: SERVER_SPACE_ID,
     collectionId: SERVER_IDENTITY_COLLECTION_ID
   })
-}
-
-/**
- * Reads the stored server history log's bytes, exactly as the log Resource
- * serves them, or `undefined` when there is no log.
- * @param options {object}
- * @param options.backend {StorageBackend}   the backend that serves the
- *   log's Collection ({@link serverLogBackend})
- * @returns {Promise<Buffer | undefined>}
- */
-export async function readServerLog({
-  backend
-}: {
-  backend: StorageBackend
-}): Promise<Buffer | undefined> {
-  const stored = await readWebvhLogResource({
-    backend,
-    spaceId: SERVER_SPACE_ID,
-    collectionId: SERVER_IDENTITY_COLLECTION_ID
-  })
-  return stored === undefined ? undefined : await buffer(stored.resourceStream)
-}
-
-/**
- * Reads the DID the stored server log's head entry names, or `undefined` when
- * there is no log or it does not parse.
- * @param options {object}
- * @param options.backend {StorageBackend}   the backend that serves the
- *   log's Collection
- * @returns {Promise<string | undefined>}
- */
-async function readHeadDid({
-  backend
-}: {
-  backend: StorageBackend
-}): Promise<string | undefined> {
-  const logBytes = await readServerLog({ backend })
-  if (logBytes === undefined) {
-    return undefined
-  }
-  try {
-    return logDid(readLogFromString(logBytes.toString('utf8')))
-  } catch {
-    return undefined
-  }
 }
 
 /**

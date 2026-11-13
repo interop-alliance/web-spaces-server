@@ -2,6 +2,7 @@ import assert from 'node:assert'
 import { createHash, randomBytes } from 'node:crypto'
 import { access } from 'node:fs/promises'
 import { Readable } from 'node:stream'
+import { buffer } from 'node:stream/consumers'
 import pg from 'pg'
 import pino from 'pino'
 import { vi } from 'vitest'
@@ -11,7 +12,12 @@ import { decodeSecretKeySeed } from '@interop/bnid'
 import { EddsaJcs2022 } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import type { ISigner } from '@interop/data-integrity-core'
-import { readLogFromString, resolveDIDFromLog } from '@interop/did-method-webvh'
+import {
+  readLogFromString,
+  resolveDIDFromLog,
+  updateDID
+} from '@interop/did-method-webvh'
+import type { DIDLog } from '@interop/did-method-webvh'
 import { DataIntegrityProof } from '@interop/data-integrity-proof'
 import { createVerifyCryptosuite } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import { signCapabilityInvocation } from '@interop/http-signature-zcap-invoke'
@@ -28,6 +34,8 @@ import { compareStamps, isoOfMs } from '../src/lib/hlc.js'
 import { prepareImportPlan } from '../src/lib/importPlan.js'
 import { installImportRevocations } from '../src/lib/importRevocations.js'
 import type { ImportRevocationScope } from '../src/lib/importRevocations.js'
+import { keyRelationships } from '../src/lib/serverIdentity.js'
+import { webvhLogSigner } from '../src/testing.js'
 import type { PeerServer } from '../src/testing.js'
 import { rootCapabilityId } from '../src/zcap.js'
 import type {
@@ -1003,6 +1011,47 @@ export function binaryInput(
 }
 
 /**
+ * Appends a version to a server history log that lists the server key under
+ * `purpose` alone, signed by the admin's update key. `updateDID` replaces the
+ * relationships with the ones it is given. The log is returned unpublished,
+ * with the relationships its resolved current document lists the key under,
+ * read the way the server reads them.
+ *
+ * @param options {object}
+ * @param options.log {DIDLog}   the log to extend
+ * @param options.adminKeyPair {Ed25519VerificationKey}   holds the update key
+ * @param options.publicKeyMultibase {string}   the server key
+ * @param options.purpose {string[]}   the relationships to list it under
+ * @returns {Promise<{ log: DIDLog, listedUnder: string[] }>}
+ */
+export async function relistServerKey({
+  log,
+  adminKeyPair,
+  publicKeyMultibase,
+  purpose
+}: {
+  log: DIDLog
+  adminKeyPair: Ed25519VerificationKey
+  publicKeyMultibase: string
+  purpose: string[]
+}): Promise<{ log: DIDLog; listedUnder: string[] }> {
+  const { log: next } = await updateDID({
+    log,
+    signer: webvhLogSigner({ keyPair: adminKeyPair }),
+    vmIdFragment: 'multibase',
+    verificationMethods: [
+      { type: 'Multikey', publicKeyMultibase, purpose }
+    ] as any
+  })
+  const { doc } = await resolveDIDFromLog(next)
+  const { listedUnder } = keyRelationships({
+    doc: doc as any,
+    publicKeyMultibase
+  })
+  return { log: next, listedUnder }
+}
+
+/**
  * Whether a path exists.
  * @param target {string}
  * @returns {Promise<boolean>}
@@ -1132,5 +1181,81 @@ export function replicaRegistration({
     } as unknown as ReplicaRegistration['capability'],
     collections: [{ id: collectionId }],
     role: 'source'
+  }
+}
+
+/**
+ * Spies on a backend's reads of the server history log (`server/id/did.jsonl`)
+ * and runs `append` once, after the first of them completes: a metadata read
+ * or a content read, whichever the code under test makes first. Every later
+ * access sees what `append` stored. Reads `append` itself makes are passed
+ * through and not counted.
+ *
+ * @param options {object}
+ * @param options.backend {StorageBackend}   the backend that stores the log
+ * @param options.append {() => Promise<void>}   stores the next log version
+ * @returns {{ accesses: () => number, restore: () => void }}   the count of
+ *   accesses so far, and the call that removes both spies
+ */
+export function appendAfterFirstServerLogAccess({
+  backend,
+  append
+}: {
+  backend: Pick<StorageBackend, 'getResource' | 'getResourceMetadata'>
+  append: () => Promise<void>
+}): { accesses: () => number; restore: () => void } {
+  const isServerLog = ({
+    spaceId,
+    collectionId,
+    resourceId
+  }: {
+    spaceId: string
+    collectionId: string
+    resourceId: string
+  }): boolean =>
+    spaceId === 'server' && collectionId === 'id' && resourceId === 'did.jsonl'
+  let accesses = 0
+  let appending = false
+  async function afterAccess(): Promise<void> {
+    accesses++
+    if (accesses > 1) {
+      return
+    }
+    appending = true
+    try {
+      await append()
+    } finally {
+      appending = false
+    }
+  }
+  const getResource = backend.getResource.bind(backend)
+  const getResourceMetadata = backend.getResourceMetadata.bind(backend)
+  const contentSpy = vi
+    .spyOn(backend, 'getResource')
+    .mockImplementation(async options => {
+      const result = await getResource(options)
+      if (appending || !isServerLog(options)) {
+        return result
+      }
+      // The read is complete before the write lands.
+      const bytes = await buffer(result.resourceStream)
+      await afterAccess()
+      return { ...result, resourceStream: Readable.from([bytes]) }
+    })
+  const metadataSpy = vi
+    .spyOn(backend, 'getResourceMetadata')
+    .mockImplementation(async options => {
+      const result = await getResourceMetadata(options)
+      if (!appending && isServerLog(options)) {
+        await afterAccess()
+      }
+      return result
+    })
+  return {
+    accesses: () => accesses,
+    restore: () => {
+      contentSpy.mockRestore()
+      metadataSpy.mockRestore()
+    }
   }
 }

@@ -54,7 +54,7 @@ import {
   projectSpaceMetadata,
   writableSpaceMetadata
 } from '../lib/spaceProjection.js'
-import { buildServiceDescription } from '../serviceDescription.js'
+import { servedServiceDescription } from '../serviceDescription.js'
 import { formatEtag, parseWritePreconditions } from '../lib/etag.js'
 import {
   metadataEtagOf,
@@ -573,29 +573,18 @@ export class SpaceRequest {
     })
 
     // zCap checks out, continue
-    // The archive carries this server's Service Description verbatim, so an
-    // importer can read which specification versions and feature set the
-    // contents were written under.
-    const { serverUrl, discloseVersion } = request.server
-    const service = buildServiceDescription({
-      serverUrl,
-      originId: storage.originId,
-      discloseVersion
-    })
     // A server with an identity signs one provenance statement per exported
     // object and embeds its DID log snapshot. One without says so once per
-    // export, not once per object.
-    const { serverSigningKey } = request.server
-    const loaded =
-      serverSigningKey === undefined
-        ? { reason: 'No export-signing key is configured.' }
-        : await loadExportAttestor({
-            storage,
-            serverBackends: request.server.serverBackends,
-            serverUrl,
-            signingKey: serverSigningKey,
-            logger: request.log
-          })
+    // export, not once per object. The log is read once here, and that read
+    // also decides the `serverDid` the archive's `service.json` carries.
+    const { serverUrl, serverSigningKey } = request.server
+    const loaded = await loadExportAttestor({
+      storage,
+      serverBackends: request.server.serverBackends,
+      serverUrl,
+      signingKey: serverSigningKey,
+      logger: request.log
+    })
     if ('reason' in loaded) {
       request.log.warn(
         { spaceId, reason: loaded.reason },
@@ -603,6 +592,13 @@ export class SpaceRequest {
       )
     }
     const attestor = 'attestor' in loaded ? loaded.attestor : undefined
+    // The archive carries the Service Description `/service` serves, identity
+    // members included, so an importer can read which specification versions
+    // and feature set the contents were written under, and by which server.
+    const service = servedServiceDescription({
+      server: request.server,
+      serverDid: loaded.serverDid
+    })
     // The Space's Collections may span the server backends; the archive is
     // composed from each one's tree.
     const tarFile = await exportSpaceArchive({
