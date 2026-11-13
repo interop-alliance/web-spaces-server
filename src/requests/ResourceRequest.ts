@@ -494,9 +494,11 @@ export class ResourceRequest {
     })
 
     // Branch on the Collection's encryption descriptor. On an encrypted Collection
-    // the `custom` value MUST be a conforming envelope of the scheme (stored
+    // a non-empty `custom` MUST be a conforming envelope of the scheme (stored
     // opaquely, `422` on a plaintext/malformed value); on a plaintext Collection
-    // it MUST be a well-formed `{ name, tags }` object (`400` otherwise).
+    // it MUST be a well-formed `{ name, tags }` object (`400` otherwise). An
+    // empty or omitted `custom` clears the stored annotations on both, and a
+    // `custom` that is not a JSON object is a `400` on both.
     const custom = resolveMetadataCustom({
       collectionMetadata,
       body,

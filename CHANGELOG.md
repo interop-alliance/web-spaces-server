@@ -14,6 +14,12 @@
 
 ### Fixed
 
+- A Metadata `PUT` with an empty `custom`, or a Resource Metadata `PUT` with
+  none, on an encrypted Collection clears the stored annotations. Both answered
+  `encryption-scheme-mismatch` (422) before.
+- A Metadata `PUT` whose `custom` is not a JSON object answers
+  `invalid-request-body` (400) on an encrypted Collection, as on a plaintext
+  one. It answered `encryption-scheme-mismatch` (422) before.
 - The production Deploy workflow no longer stops when Fly refuses its volume
   snapshot because an earlier one is still scheduled. It warns and goes on.
 - Export Space reads the server history log once, so its `service.json`

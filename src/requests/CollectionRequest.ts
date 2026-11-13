@@ -447,9 +447,10 @@ export class CollectionRequest {
 
     // Pre-auth body shape (400). The deeper `custom` check is deferred until
     // after authorization, where the encryption descriptor in effect decides
-    // whether `custom` is a plaintext `{ name, tags }` or an opaque envelope;
-    // gating it on auth keeps a 422/400 observable only to a caller
-    // authorized to write here.
+    // whether a non-empty `custom` is a plaintext `{ name, tags }` or an
+    // opaque envelope (an empty or omitted one clears on both); gating it on
+    // auth keeps a 422/400 observable only to a caller authorized to write
+    // here.
     const parsed = parseCollectionMetadataBody({ body, requestName })
     // The Collection `id` is immutable: when the body carries one, it must
     // match the `{collection_id}` in the URL (spec spells this out for Update

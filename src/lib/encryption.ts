@@ -766,6 +766,10 @@ function resolveEncryptionProfile({
  * and the 404-if-missing check, before the write, so a 422 is observable only to
  * a caller already authorized to write the target.
  *
+ * An absent or empty `custom` is rejected here like any other non-envelope.
+ * Call this through `resolveMetadataCustom`, which answers a clearing write
+ * first, and not directly from a handler.
+ *
  * @param options {object}
  * @param options.collectionMetadata {{ encryption?: CollectionEncryption }}
  *   the target Collection's stored Collection Metadata object
