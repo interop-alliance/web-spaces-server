@@ -2379,9 +2379,9 @@ declare module 'fastify' {
     /**
      * Whether the service description's `instance` member carries the server
      * version (plugin option `discloseVersion`, config
-     * `WAS_DISCLOSE_VERSION`). Read wherever a handler builds the description
-     * outside the `/service` route -- today the Export Space handler, which
-     * puts it in the archive. Set by `fastify.decorate` in plugin.ts.
+     * `WAS_DISCLOSE_VERSION`). Read by `servedServiceDescription`, which
+     * builds the document for the `/service` route and for the Export Space
+     * archive. Set by `fastify.decorate` in plugin.ts.
      */
     discloseVersion: boolean
   }

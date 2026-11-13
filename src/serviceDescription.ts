@@ -15,7 +15,8 @@
  * every token a wallet needs. It is served unauthenticated at `/service`, and
  * every response the server sends links to it with a
  * `Link: <...>; rel="service"` header, which is how a client finds it from any
- * URL it holds. The document has no auth hooks; it depends on `serverUrl`, the
+ * URL it holds. Export Space writes the same document into the archive as its
+ * `service.json`. The document has no auth hooks; it depends on `serverUrl`, the
  * configuration the plugin was registered with, the active backend's
  * `originId`, and one storage read: whether the server's own history log lists
  * its export-signing key (`lib/serverIdentity.ts`), which decides the core
@@ -25,7 +26,12 @@
  * DID), and the spec forbids a client gating on `instance`.
  */
 import { createHash } from 'node:crypto'
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type {
+  FastifyBaseLogger,
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest
+} from 'fastify'
 
 import {
   AUTHZ_PROFILE_IDENTIFIER,
@@ -181,7 +187,9 @@ export function serviceDescriptionUrl(serverUrl: string): string {
 
 /**
  * Builds the service description for a server base URL. Every URL in it is
- * absolute, built from `serverUrl`.
+ * absolute, built from `serverUrl`. Callers go through
+ * {@link servedServiceDescription}, which reads these inputs from the server
+ * instance.
  * @param options {object}
  * @param options.serverUrl {string}
  * @param options.originId {string}   the store's origin id, carried on the
@@ -192,7 +200,7 @@ export function serviceDescriptionUrl(serverUrl: string): string {
  *   specification's entry; absent members are left out
  * @returns {ServiceDescription}
  */
-export function buildServiceDescription({
+function buildServiceDescription({
   serverUrl,
   originId,
   discloseVersion,
@@ -307,20 +315,80 @@ export function addServiceLinkHook(fastify: FastifyInstance): void {
 }
 
 /**
+ * The service description this server instance serves under `serverDid`. The
+ * `/service` route and the Export Space handler both build the document here,
+ * so the archive's `service.json` is the document the route serves, identity
+ * members included. The route passes the DID it read through
+ * {@link servedServerDid}. Export Space passes the DID it judged from its own
+ * read of the log, under the same rule, so its `service.json` and its
+ * provenance snapshot come from one log version.
+ * @param options {object}
+ * @param options.server {FastifyInstance}   the decorated instance; its
+ *   `serverUrl`, `discloseVersion`, `serverSigningKey` and `storage` are read
+ * @param options.serverDid {string | undefined}   the server DID the caller
+ *   judged from a read of the log
+ * @returns {ServiceDescription}
+ */
+export function servedServiceDescription({
+  server,
+  serverDid
+}: {
+  server: FastifyInstance
+  serverDid: string | undefined
+}): ServiceDescription {
+  const { serverUrl, discloseVersion, serverSigningKey, storage } = server
+  return buildServiceDescription({
+    serverUrl,
+    originId: storage.originId,
+    discloseVersion,
+    identity: {
+      exportSigningMethod: serverSigningKey?.exportSigningMethod,
+      serverDid
+    }
+  })
+}
+
+/**
+ * The server DID `/service` advertises: read through the memoized resolver
+ * (`resolveServerDid` in `lib/serverIdentity.ts`), and only on a server with
+ * an export-signing key.
+ * @param options {object}
+ * @param options.server {FastifyInstance}   the decorated instance
+ * @param options.logger {FastifyBaseLogger}   for the resolver's warnings
+ * @returns {Promise<string | undefined>}
+ */
+async function servedServerDid({
+  server,
+  logger
+}: {
+  server: FastifyInstance
+  logger: FastifyBaseLogger
+}): Promise<string | undefined> {
+  const { serverUrl, serverSigningKey, storage, serverBackends } = server
+  if (serverSigningKey === undefined) {
+    return undefined
+  }
+  return await resolveServerDid({
+    storage,
+    serverBackends,
+    serverUrl,
+    signingKey: serverSigningKey,
+    logger
+  })
+}
+
+/**
  * Registers `GET /service` (and Fastify's implicit bodyless `HEAD`). The
  * serialized document and its `ETag` are computed once per `serverUrl` and
  * server DID, since the document changes with nothing else: the store's origin
- * id is fixed for the backend's life. The DID is read per request through the
- * cached resolver, because the admin writes the server's history log after
- * boot.
+ * id is fixed for the backend's life. The DID is resolved per request
+ * (`resolveServerDid`, memoized on the log's `ETag`), because the admin writes
+ * the server's history log after boot.
  * @param fastify {FastifyInstance}
- * @param options {object}
- * @param options.discloseVersion {boolean}   include `instance.version`
  * @returns {Promise<void>}
  */
 export async function initServiceDescriptionRoutes(
-  fastify: FastifyInstance,
-  { discloseVersion }: { discloseVersion: boolean }
+  fastify: FastifyInstance
 ): Promise<void> {
   let cached:
     | {
@@ -334,36 +402,18 @@ export async function initServiceDescriptionRoutes(
   fastify.get(
     serviceDescriptionPath(),
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const { serverUrl, serverSigningKey, storage, serverBackends } =
-        request.server
-      const did =
-        serverSigningKey === undefined
-          ? undefined
-          : await resolveServerDid({
-              storage,
-              serverBackends,
-              serverUrl,
-              signingKey: serverSigningKey,
-              logger: request.log
-            })
+      const { server, log: logger } = request
+      const { serverUrl } = server
+      const serverDid = await servedServerDid({ server, logger })
       if (
         cached === undefined ||
         cached.serverUrl !== serverUrl ||
-        cached.did !== did
+        cached.did !== serverDid
       ) {
-        const body = JSON.stringify(
-          buildServiceDescription({
-            serverUrl,
-            originId: storage.originId,
-            discloseVersion,
-            identity: {
-              exportSigningMethod: serverSigningKey?.exportSigningMethod,
-              serverDid: did
-            }
-          })
-        )
+        const document = servedServiceDescription({ server, serverDid })
+        const body = JSON.stringify(document)
         const digest = createHash('sha256').update(body).digest('base64url')
-        cached = { serverUrl, did, body, etag: `"${digest}"` }
+        cached = { serverUrl, did: serverDid, body, etag: `"${digest}"` }
       }
       reply.header(
         'cache-control',

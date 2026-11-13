@@ -9,9 +9,12 @@
  * covered separately at the lib layer in `test/importTar.test.ts`; this suite
  * does not duplicate it.
  */
-import { it, describe, beforeAll, afterAll } from 'vitest'
+import { it, describe, beforeAll, afterAll, vi } from 'vitest'
 import assert from 'node:assert'
 import { Buffer } from 'node:buffer'
+import { randomBytes } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import { Readable } from 'node:stream'
 import type { FastifyInstance } from 'fastify'
 import * as tar from 'tar-stream'
@@ -19,15 +22,26 @@ import YAML from 'yaml'
 
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { createDID, logToJsonlString } from '@interop/did-method-webvh'
+import type { DIDLog } from '@interop/did-method-webvh'
 
+import { WEBVH_DOCUMENT_REVERIFY_AGE } from '../src/config.default.js'
 import { extractTarEntries } from '../src/lib/importTar.js'
+import { etagOf } from '../src/lib/etag.js'
+import { createServerSigningKey } from '../src/lib/serverIdentity.js'
+import type { ServerSigningKey } from '../src/lib/serverIdentity.js'
+import { mintServerDid } from '../src/testing.js'
+import type { TempFileSystemBackend } from '../src/testing.js'
 import { spaceRevocationsPath } from '../src/lib/paths.js'
 import {
   anHourFromNow,
+  appendAfterFirstServerLogAccess,
   bareDidKeyOf,
+  binaryInput,
   client,
   delegate,
   openTempBackend,
+  pwsClient,
+  relistServerKey,
   rootZcap,
   startTestServer,
   webvhLogSigner,
@@ -70,6 +84,78 @@ function validManifestYaml(): string {
     'ubc-version': '0.1',
     contents: { space: { url: 'https://example/spec#spaces' } }
   })
+}
+
+/**
+ * Exports a Space and returns its archive entries.
+ *
+ * @param options {object}
+ * @param options.pws {any}   a client handle signing as the Space controller
+ * @param options.baseServerUrl {string}
+ * @param options.spaceId {string}
+ * @returns {Promise<Awaited<ReturnType<typeof extractTarEntries>>>}
+ */
+async function exportSpaceEntries({
+  pws,
+  baseServerUrl,
+  spaceId
+}: {
+  pws: any
+  baseServerUrl: string
+  spaceId: string
+}): Promise<Awaited<ReturnType<typeof extractTarEntries>>> {
+  const response = await pws.request({
+    url: `${baseServerUrl}space/${spaceId}/export`,
+    method: 'POST'
+  })
+  assert.equal(response.status, 200)
+  return await extractTarEntries(
+    Readable.from(Buffer.from(await response.arrayBuffer()))
+  )
+}
+
+/**
+ * The `serverDid` member of a Service Description's core `specs` entry.
+ *
+ * @param document {any}   a parsed Service Description
+ * @returns {string | undefined}
+ */
+function serverDidOf(document: any): string | undefined {
+  return document.specs['https://w3id.org/pws'][0].serverDid
+}
+
+/**
+ * Exports a Space and reads the server's `/service` response, returning the
+ * raw bytes of the archive's `service.json` entry and of the response body.
+ * Also checks that the entry is written immediately after the manifest, which
+ * the reader relies on.
+ *
+ * @param options {object}
+ * @param options.pws {any}   a client handle signing as the Space controller
+ * @param options.baseServerUrl {string}
+ * @param options.spaceId {string}
+ * @returns {Promise<{ entry: Buffer, served: Buffer }>}
+ */
+async function serviceEntryAndServedBody({
+  pws,
+  baseServerUrl,
+  spaceId
+}: {
+  pws: any
+  baseServerUrl: string
+  spaceId: string
+}): Promise<{ entry: Buffer; served: Buffer }> {
+  const entries = await exportSpaceEntries({ pws, baseServerUrl, spaceId })
+  assert.deepEqual([...entries.keys()].slice(0, 2), [
+    'manifest.yml',
+    'service.json'
+  ])
+  const served = await fetch(new URL('/service', baseServerUrl))
+  assert.equal(served.status, 200)
+  return {
+    entry: entries.get('service.json')!.body!,
+    served: Buffer.from(await served.arrayBuffer())
+  }
 }
 
 describe('Export/Import Space API (wire level)', () => {
@@ -116,23 +202,16 @@ describe('Export/Import Space API (wire level)', () => {
     })
 
     it("carries the served Service Description as the archive's service.json", async () => {
-      const response = await alice.pws.request({
-        url: `${baseServerUrl}space/${sourceSpaceId}/export`,
-        method: 'POST'
+      const { entry, served } = await serviceEntryAndServedBody({
+        pws: alice.pws,
+        baseServerUrl,
+        spaceId: sourceSpaceId
       })
-      const entries = await extractTarEntries(
-        Readable.from(Buffer.from(await response.arrayBuffer()))
-      )
-      const names = [...entries.keys()]
-      // Written immediately after the manifest, which the reader relies on.
-      assert.deepEqual(names.slice(0, 2), ['manifest.yml', 'service.json'])
-
-      const served = await fetch(new URL('/service', baseServerUrl))
-      assert.equal(served.status, 200)
-      assert.deepEqual(
-        JSON.parse(entries.get('service.json')!.body!.toString('utf8')),
-        await served.json()
-      )
+      assert.deepStrictEqual(entry, served)
+      // A server with no identity advertises neither identity member.
+      const document = JSON.parse(served.toString('utf8'))
+      assert.equal(document.instance.exportSigningMethod, undefined)
+      assert.equal(serverDidOf(document), undefined)
     })
 
     it('masks a non-controller export as 404 (not 403)', async () => {
@@ -801,13 +880,11 @@ describe('Export/Import Space API (wire level)', () => {
      * Exports a Space and returns its archive entries.
      */
     async function exportEntries(spaceId: string) {
-      const response = await alice.pws.request({
-        url: `${baseServerUrl}space/${spaceId}/export`,
-        method: 'POST'
+      return await exportSpaceEntries({
+        pws: alice.pws,
+        baseServerUrl,
+        spaceId
       })
-      return extractTarEntries(
-        Readable.from(Buffer.from(await response.arrayBuffer()))
-      )
     }
 
     /**
@@ -1176,5 +1253,285 @@ describe('Export/Import Space API (wire level)', () => {
       assert.equal(restored.meta.delegator, created.did)
       assert.equal(await readStatus(spaceId, toBob), 404)
     })
+  })
+})
+
+describe('Export Space service.json on a server with an identity', () => {
+  let fastify: FastifyInstance,
+    baseServerUrl: string,
+    alice: any,
+    backend: TempFileSystemBackend,
+    adminKeyPair: Ed25519VerificationKey,
+    signingKey: ServerSigningKey,
+    log: DIDLog
+  const seed = randomBytes(32)
+  const spaceId = `export-identity-${crypto.randomUUID()}`
+
+  beforeAll(async () => {
+    adminKeyPair = await Ed25519VerificationKey.generate()
+    backend = await openTempBackend()
+    ;({ fastify, baseServerUrl } = await startTestServer({
+      backend,
+      serverKeySeed: seed,
+      adminDid: `did:key:${adminKeyPair.publicKeyMultibase}`
+    }))
+    // The admin publishes the server's history log, listing the
+    // export-signing key, so `/service` advertises the server DID.
+    const admin = pwsClient({
+      signer: adminKeyPair.didKeySigner(),
+      baseServerUrl
+    })
+    signingKey = await createServerSigningKey({ seed })
+    ;({ log } = await mintServerDid({
+      serverUrl: baseServerUrl,
+      publicKeyMultibase: signingKey.keyPair.publicKeyMultibase!,
+      admin: adminKeyPair
+    }))
+    await admin.space('server').collection('id').configure({ force: true })
+    const published = await admin.request({
+      url: `${baseServerUrl}space/server/id/did.jsonl`,
+      method: 'PUT',
+      headers: { 'content-type': 'text/jsonl' },
+      body: new Blob([logToJsonlString(log)], { type: 'text/jsonl' })
+    })
+    assert.equal(published.status, 201)
+
+    ;({ alice } = await zcapClients({ baseServerUrl }))
+    await alice.pws.createSpace({ id: spaceId, controller: alice.did })
+  })
+  afterAll(async () => {
+    await fastify.close()
+  })
+
+  /**
+   * The next log version after `prior`, listing the export-signing key under
+   * `purpose` alone. Asserts the resolved document lists it so: `updateDID`
+   * replaces the relationships rather than merging them.
+   */
+  async function relisted({
+    prior,
+    purpose
+  }: {
+    prior: DIDLog
+    purpose: string[]
+  }): Promise<DIDLog> {
+    const { log: next, listedUnder } = await relistServerKey({
+      log: prior,
+      adminKeyPair,
+      publicKeyMultibase: signingKey.keyPair.publicKeyMultibase!,
+      purpose
+    })
+    assert.deepStrictEqual(listedUnder, purpose)
+    return next
+  }
+
+  /**
+   * Stores `next` as the server history log through a backend write, which
+   * mints a new stamp and so a new `ETag`.
+   */
+  async function storeLog(next: DIDLog): Promise<void> {
+    await backend.writeResource({
+      spaceId: 'server',
+      collectionId: 'id',
+      resourceId: 'did.jsonl',
+      input: binaryInput(logToJsonlString(next), { contentType: 'text/jsonl' })
+    })
+  }
+
+  /**
+   * Rewrites the stored log's bytes to `next` out of band: the sidecar, and
+   * so the log's `ETag`, stay as they were.
+   */
+  async function rewriteLogInPlace(next: DIDLog): Promise<void> {
+    const target = {
+      spaceId: 'server',
+      collectionId: 'id',
+      resourceId: 'did.jsonl'
+    }
+    const etagBefore = etagOf((await backend.getResourceMetadata(target))!)
+    const collectionDir = path.join(backend.spacesDir, 'server', 'id')
+    const { fileName } = JSON.parse(
+      await readFile(path.join(collectionDir, '.meta.did.jsonl.json'), 'utf8')
+    )
+    await writeFile(
+      path.join(collectionDir, fileName),
+      logToJsonlString(next),
+      'utf8'
+    )
+    assert.equal(
+      etagOf((await backend.getResourceMetadata(target))!),
+      etagBefore
+    )
+  }
+
+  /**
+   * The `serverDid` the running server's `/service` advertises, if any.
+   */
+  async function advertisedServerDid(): Promise<string | undefined> {
+    const response = await fetch(new URL('/service', baseServerUrl))
+    assert.equal(response.status, 200)
+    return serverDidOf(await response.json())
+  }
+
+  /**
+   * Exports the test Space and returns its archive entries.
+   */
+  async function exportEntries(): Promise<
+    Awaited<ReturnType<typeof extractTarEntries>>
+  > {
+    return await exportSpaceEntries({
+      pws: alice.pws,
+      baseServerUrl,
+      spaceId
+    })
+  }
+
+  it('carries the identity members, byte-identical to the /service body', async () => {
+    const { entry, served } = await serviceEntryAndServedBody({
+      pws: alice.pws,
+      baseServerUrl,
+      spaceId
+    })
+    const document = JSON.parse(served.toString('utf8'))
+    assert.equal(typeof document.instance.exportSigningMethod, 'string')
+    assert.match(serverDidOf(document)!, /^did:webvh:/)
+    assert.deepStrictEqual(entry, served)
+  })
+
+  it('takes serverDid and the provenance snapshot from one log version, even when the log changes mid-export', async () => {
+    // The next log version lists the key under `authentication` alone, so
+    // judged on its own it advertises no server DID and signs nothing.
+    const before = logToJsonlString(log)
+    const beforeVersionId = log.at(-1)!.versionId
+    const next = await relisted({ prior: log, purpose: ['authentication'] })
+
+    // The export's first access to the server log, a metadata read or a
+    // content read, completes; then the next version lands, written straight
+    // to the backend. Every later access during the export sees it.
+    const spied = appendAfterFirstServerLogAccess({
+      backend,
+      append: async () => await storeLog(next)
+    })
+
+    let entries: Awaited<ReturnType<typeof extractTarEntries>>
+    try {
+      entries = await exportEntries()
+    } finally {
+      spied.restore()
+    }
+    // Later cases build on the stored version.
+    log = next
+
+    // The export read the log once, and judged both outputs from that read:
+    // the version from before the write.
+    assert.equal(spied.accesses(), 1)
+    const service = JSON.parse(entries.get('service.json')!.body!.toString())
+    const serverDid = serverDidOf(service)
+    assert.match(serverDid!, /^did:webvh:/)
+    assert.equal(entries.get('did.jsonl')?.body?.toString(), before)
+    const provenance = entries.get('provenance.jsonl')?.body?.toString()
+    assert.ok(provenance, 'the archive carries provenance')
+    for (const line of provenance.trim().split('\n')) {
+      const statement = JSON.parse(line)
+      assert.ok(statement.proof.verificationMethod.startsWith(`${serverDid}#`))
+      assert.equal(statement.didVersionId, beforeVersionId)
+    }
+    // The version that landed mid-export is stored, and judged on its own
+    // it advertises no server DID.
+    assert.equal(await advertisedServerDid(), undefined)
+  })
+
+  it('judges service.json from the log as stored, not from what /service last read', async () => {
+    // A version listing the key under assertionMethod again. `/service`
+    // reads it and records that it advertises the server DID.
+    const listed = await relisted({ prior: log, purpose: ['assertionMethod'] })
+    await storeLog(listed)
+    log = listed
+    const serverDid = await advertisedServerDid()
+    assert.match(serverDid!, /^did:webvh:/)
+
+    // The next version drops assertionMethod. Any backend write mints a new
+    // stamp, so `/service` would read it at once. Its bytes are rewritten in
+    // place instead, out of band: the sidecar and so the log's `ETag` stay,
+    // and `/service` keeps the outcome it recorded for that `ETag`.
+    const next = await relisted({ prior: log, purpose: ['authentication'] })
+    await rewriteLogInPlace(next)
+    assert.equal(await advertisedServerDid(), serverDid)
+
+    // The export reads the stored bytes, so its service.json and its
+    // provenance agree with the version it reads: no server DID, nothing
+    // signed. An export that took service.json's DID from the memo ahead of
+    // its own read would carry the stale DID with no provenance.
+    const entries = await exportEntries()
+    const service = JSON.parse(entries.get('service.json')!.body!.toString())
+    assert.equal(serverDidOf(service), undefined)
+    assert.equal(entries.has('provenance.jsonl'), false)
+    assert.equal(entries.has('did.jsonl'), false)
+    log = next
+  })
+
+  it('signs under the appended version when another reader verified it before the export judged its own read', async () => {
+    const listed = await relisted({ prior: log, purpose: ['assertionMethod'] })
+    await storeLog(listed)
+    log = listed
+    const next = await relisted({
+      prior: log,
+      purpose: ['assertionMethod', 'capabilityInvocation']
+    })
+
+    // The export's read of the log completes. Then the next version lands,
+    // and `/service` verifies it and records its head, all before the export
+    // judges its own read. That read no longer extends the recorded head,
+    // which says nothing about the stored log.
+    const spied = appendAfterFirstServerLogAccess({
+      backend,
+      append: async () => {
+        await storeLog(next)
+        assert.match((await advertisedServerDid())!, /^did:webvh:/)
+      }
+    })
+    let entries: Awaited<ReturnType<typeof extractTarEntries>>
+    try {
+      entries = await exportEntries()
+    } finally {
+      spied.restore()
+    }
+    log = next
+
+    // The export read again and took every output from the appended version.
+    const service = JSON.parse(entries.get('service.json')!.body!.toString())
+    const serverDid = serverDidOf(service)
+    assert.match(serverDid!, /^did:webvh:/)
+    assert.equal(
+      entries.get('did.jsonl')?.body?.toString(),
+      logToJsonlString(next)
+    )
+    const provenance = entries.get('provenance.jsonl')?.body?.toString()
+    assert.ok(provenance, 'the archive carries provenance')
+    for (const line of provenance.trim().split('\n')) {
+      assert.equal(JSON.parse(line).didVersionId, next.at(-1)!.versionId)
+    }
+  })
+
+  it('judges the log again under an unchanged ETag once the recorded outcome reaches the re-verify age', async () => {
+    const serverDid = await advertisedServerDid()
+    assert.match(serverDid!, /^did:webvh:/)
+
+    // Rewritten out of band to a version that advertises no server DID. The
+    // `ETag` stands, so `/service` keeps the outcome it recorded.
+    const next = await relisted({ prior: log, purpose: ['authentication'] })
+    await rewriteLogInPlace(next)
+    log = next
+    assert.equal(await advertisedServerDid(), serverDid)
+
+    const now = performance.now.bind(performance)
+    const clock = vi
+      .spyOn(performance, 'now')
+      .mockImplementation(() => now() + WEBVH_DOCUMENT_REVERIFY_AGE)
+    try {
+      assert.equal(await advertisedServerDid(), undefined)
+    } finally {
+      clock.mockRestore()
+    }
   })
 })

@@ -16,6 +16,14 @@
 
 - The production Deploy workflow no longer stops when Fly refuses its volume
   snapshot because an earlier one is still scheduled. It warns and goes on.
+- Export Space reads the server history log once, so its `service.json`
+  `serverDid` and its provenance snapshot always come from one log version.
+- The sync signer takes its `serverDid` and its `capabilityInvocation` check
+  from one judged version of the server history log. A log change during a pull
+  cycle can no longer pair a DID with another version's document.
+- An export archive's `service.json` is the document `/service` serves, byte for
+  byte. On a server with an identity it now carries `serverDid` and
+  `instance.exportSigningMethod`, which it used to leave out.
 
 ## 0.46.0 - 2026-11-12
 

@@ -14,28 +14,29 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { ISigner } from '@interop/data-integrity-core'
 import type { DIDDoc } from '@interop/did-method-webvh'
-import { isServerFault } from '../errors.js'
 import type { StorageBackend } from '../types.js'
 import type { ServerBackends } from './serverBackends.js'
 import {
-  resolveServerDid,
+  resolveServerIdentity,
   serverKeyPair,
   serverMethodId
 } from './serverIdentity.js'
 import type { ServerSigningKey } from './serverIdentity.js'
-import {
-  relationshipMethodIds,
-  resolveWebvhController
-} from './webvhController.js'
+import { relationshipMethodIds } from './webvhController.js'
 
 /**
  * Loads the signer for sync invocations, or says why the server has none.
  *
- * The server must advertise a `serverDid` (`resolveServerDid`, the check
- * `/service` makes), and the resolved current document of its log must list
- * the seed key as the method `{serverDid}#{publicKeyMultibase}` under
- * `capabilityInvocation`. The returned signer's `id` is that method, so a
- * peer verifies its signature against the server's own log.
+ * The server must advertise a `serverDid` (the check `/service` makes), and
+ * the resolved current document of its log must list the seed key as the
+ * method `{serverDid}#{publicKeyMultibase}` under `capabilityInvocation`. The
+ * returned signer's `id` is that method, so a source server verifies its
+ * signature against this server's own log.
+ *
+ * Both checks read one judged log version. `resolveServerIdentity` hands back
+ * the DID and the document it was judged from together, memoized on the log
+ * Resource's `ETag`. A call while the log stands still costs one metadata
+ * read; it runs once per pull cycle and once per replica registration.
  *
  * A refusal says why the server has no sync signer. `no-server-did`: no
  * `WAS_SERVER_KEY_SEED` is set, or `/service` advertises no `serverDid`.
@@ -49,7 +50,7 @@ import {
  * @param options.serverUrl {string}
  * @param [options.signingKey] {ServerSigningKey}   the key derived from
  *   `WAS_SERVER_KEY_SEED`, absent when the seed is unset
- * @param options.logger {FastifyBaseLogger}   for `resolveServerDid`'s own
+ * @param options.logger {FastifyBaseLogger}   for the identity check's own
  *   once-per-log-version warnings
  * @returns {Promise<{ serverDid: string, signer: ISigner } | { refusal: string, reason: string }>}
  * @throws {ProblemError}   a storage fault met while reading the log (5xx),
@@ -79,14 +80,14 @@ export async function loadSyncSigner({
         'advertises no serverDid.'
     }
   }
-  const serverDid = await resolveServerDid({
+  const identity = await resolveServerIdentity({
     storage,
     serverBackends,
     serverUrl,
     signingKey,
     logger
   })
-  if (serverDid === undefined) {
+  if (identity === undefined) {
     return {
       refusal: 'no-server-did',
       reason:
@@ -94,25 +95,7 @@ export async function loadSyncSigner({
         'log lists its key under "assertionMethod".'
     }
   }
-  let doc: DIDDoc
-  try {
-    doc = await resolveWebvhController({
-      storage,
-      serverBackends,
-      serverUrl,
-      did: serverDid
-    })
-  } catch (err) {
-    // A storage fault says nothing about the log, and keeps its 5xx.
-    if (isServerFault(err)) {
-      throw err
-    }
-    // The log changed between the two reads and no longer verifies.
-    return {
-      refusal: 'no-server-did',
-      reason: `The server history log does not verify: ${(err as Error).message}`
-    }
-  }
+  const { serverDid, doc } = identity
   const { publicKeyMultibase } = signingKey.keyPair
   const methodId = serverMethodId({ serverDid, signingKey })
   if (!listsInvocationMethod({ doc, methodId, publicKeyMultibase })) {

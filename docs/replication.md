@@ -13,9 +13,13 @@ glossary (see Replica registration, Pull loop and Creating stamp there).
 capabilities with when it replicates a Space. It is the same seed key as the
 export-signing key, named as the method `{serverDid}#{publicKeyMultibase}`.
 
-`loadSyncSigner` returns a signer only when `resolveServerDid` yields a
+`loadSyncSigner` returns a signer only when the server's log yields a
 `serverDid` and the resolved document lists the key under
-`capabilityInvocation`. `resolveServerDid` is described in
+`capabilityInvocation`. It takes both from one call to `resolveServerIdentity`,
+which hands back the DID together with the document it was judged from, so the
+two decisions come from one log version. That call is memoized on the log's
+`ETag`, so a pull cycle pays one metadata read of the log while the log stands
+still. It is described in
 [server-identity-and-provenance.md](server-identity-and-provenance.md).
 Otherwise `loadSyncSigner` returns a refusal with a reason: no advertised
 `serverDid`, or the key not listed under `capabilityInvocation`. A storage fault

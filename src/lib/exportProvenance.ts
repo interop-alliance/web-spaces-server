@@ -37,8 +37,6 @@
  * deleted after the tree was built is gone by the time it is digested here.
  * It gets no statement, and the export goes on.
  */
-import { readLogFromString } from '@interop/did-method-webvh'
-import type { DIDLog } from '@interop/did-method-webvh'
 import type { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { EddsaJcs2022 } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import jsigs from '@interop/jsonld-signatures'
@@ -47,8 +45,6 @@ import {
   classifyCollectionFile
 } from '@interop/space-archive'
 import type { ArchiveEntry, ArchiveFile } from '@interop/space-archive'
-import type { FastifyBaseLogger } from 'fastify'
-import type { StorageBackend } from '../types.js'
 import {
   absoluteUrl,
   collectionMetaPath,
@@ -64,16 +60,15 @@ import {
 } from './provenanceStatement.js'
 import type { Claims } from './provenanceStatement.js'
 import {
-  readServerLog,
-  resolveServerDid,
+  readServerIdentity,
   serverKeyPair,
-  serverLogBackend,
-  serverMethodId,
-  signingKeyRelationshipProblem
+  serverMethodId
 } from './serverIdentity.js'
-import type { ServerSigningKey } from './serverIdentity.js'
-import type { ServerBackends } from './serverBackends.js'
-import { headOf, logDid, verifyWebvhLog } from './webvhController.js'
+import type {
+  ServerIdentityContext,
+  ServerSigningKey
+} from './serverIdentity.js'
+import { headOf } from './webvhController.js'
 
 /**
  * What an export needs to sign its provenance: the server's DID, the log
@@ -96,27 +91,31 @@ export interface ExportAttestor {
 }
 
 /**
- * Loads what an export needs to sign its provenance, or says why it cannot.
+ * Loads what an export needs to sign its provenance, or says why it cannot,
+ * together with the server DID the export's `service.json` carries.
  *
- * The server has an identity when `resolveServerDid` finds one (the same
- * check `/service` makes for `serverDid`). The log snapshot the archive will
- * embed is then read and checked on its own: its head names the same DID, it
- * verifies as that DID's log, and its document lists the export-signing key
- * as the method `{serverDid}#{publicKeyMultibase}`, under the relationships
- * `signingKeyRelationshipProblem` allows (`assertionMethod`, and optionally
- * `capabilityInvocation`).
- * The snapshot is what an importer verifies against, so a log appended between
- * the two reads is judged by the bytes that travel.
+ * The server history log is read once (`readServerIdentity`). That read's
+ * bytes decide the server DID under the rule `/service` advertises
+ * `serverDid` under, and they are the snapshot the archive embeds. So the
+ * `serverDid` handed back and the snapshot come from one log version, even
+ * when the log is appended while the export runs.
+ *
+ * The snapshot's document must also list the export-signing key as the method
+ * `{serverDid}#{publicKeyMultibase}`. A document that lists the key under
+ * another id still yields a `serverDid`, but no attestor. The snapshot is what
+ * an importer verifies against, so it is judged by the bytes that travel.
  *
  * @param options {object}
  * @param options.storage {StorageBackend}   the control plane
  * @param options.serverBackends {ServerBackends}   the set `storage` is the
  *   control plane of
  * @param options.serverUrl {string}
- * @param options.signingKey {ServerSigningKey}
- * @param options.logger {FastifyBaseLogger}   for `resolveServerDid`'s own
+ * @param [options.signingKey] {ServerSigningKey}   absent on a server with
+ *   no export-signing key, which has no identity to sign with
+ * @param options.logger {FastifyBaseLogger}   for the identity check's
  *   once-per-log-version warnings
- * @returns {Promise<{ attestor: ExportAttestor } | { reason: string }>}
+ * @returns {Promise<{ serverDid: string | undefined } &
+ *   ({ attestor: ExportAttestor } | { reason: string })>}
  */
 export async function loadExportAttestor({
   storage,
@@ -124,75 +123,52 @@ export async function loadExportAttestor({
   serverUrl,
   signingKey,
   logger
-}: {
-  storage: StorageBackend
-  serverBackends: ServerBackends
-  serverUrl: string
-  signingKey: ServerSigningKey
-  logger: FastifyBaseLogger
-}): Promise<{ attestor: ExportAttestor } | { reason: string }> {
-  const serverDid = await resolveServerDid({
+}: Omit<ServerIdentityContext, 'signingKey'> & {
+  signingKey: ServerSigningKey | undefined
+}): Promise<
+  { serverDid: string | undefined } & (
+    { attestor: ExportAttestor } | { reason: string }
+  )
+> {
+  if (signingKey === undefined) {
+    return {
+      serverDid: undefined,
+      reason: 'No export-signing key is configured.'
+    }
+  }
+  const identity = await readServerIdentity({
     storage,
     serverBackends,
     serverUrl,
     signingKey,
     logger
   })
-  if (serverDid === undefined) {
-    return { reason: 'No server DID lists the export-signing key.' }
+  if (!('serverDid' in identity)) {
+    return { serverDid: undefined, reason: identity.reason }
   }
-  const didLog = await readServerLog({
-    backend: await serverLogBackend({ serverBackends })
-  })
-  if (didLog === undefined) {
-    return { reason: 'The server history log is gone.' }
-  }
-  let log: DIDLog
-  try {
-    log = readLogFromString(didLog.toString('utf8'))
-  } catch {
-    return { reason: 'The server history log snapshot does not parse.' }
-  }
-  if (logDid(log) !== serverDid) {
-    return {
-      reason: 'The server history log snapshot names another DID.'
-    }
-  }
+  const { serverDid, logBytes, log, doc } = identity
   const { publicKeyMultibase } = signingKey.keyPair
-  try {
-    const { doc, deactivated } = await verifyWebvhLog({ did: serverDid, log })
-    if (deactivated) {
-      return { reason: 'The server DID has been deactivated.' }
-    }
-    const problem = signingKeyRelationshipProblem({ doc, publicKeyMultibase })
-    if (problem !== undefined) {
-      return { reason: problem }
-    }
-    const methodId = serverMethodId({ serverDid, signingKey })
-    const listed = (doc.verificationMethod ?? []).some(
-      method =>
-        method.id === methodId &&
-        method.publicKeyMultibase === publicKeyMultibase
-    )
-    if (!listed) {
-      return {
-        reason:
-          `The server document lists the export-signing key under an id ` +
-          `other than "${methodId}".`
-      }
-    }
+  const methodId = serverMethodId({ serverDid, signingKey })
+  const listed = (doc.verificationMethod ?? []).some(
+    method =>
+      method.id === methodId && method.publicKeyMultibase === publicKeyMultibase
+  )
+  if (!listed) {
     return {
-      attestor: {
-        serverUrl,
-        serverDid,
-        didLog,
-        didVersionId: headOf(log).versionId,
-        keyPair: serverKeyPair({ serverDid, signingKey })
-      }
+      serverDid,
+      reason:
+        `The server document lists the export-signing key under an id ` +
+        `other than "${methodId}".`
     }
-  } catch (err) {
-    return {
-      reason: `The server history log snapshot does not verify: ${(err as Error).message}`
+  }
+  return {
+    serverDid,
+    attestor: {
+      serverUrl,
+      serverDid,
+      didLog: logBytes,
+      didVersionId: headOf(log).versionId,
+      keyPair: serverKeyPair({ serverDid, signingKey })
     }
   }
 }

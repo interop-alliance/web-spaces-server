@@ -624,7 +624,7 @@ async function wasPlugin(
     done(null, payload)
   })
 
-  fastify.register(initServiceDescriptionRoutes, { discloseVersion })
+  fastify.register(initServiceDescriptionRoutes)
   fastify.register(initSpacesRepositoryRoutes)
   fastify.register(initSpaceRoutes)
   fastify.register(initCollectionRoutes)

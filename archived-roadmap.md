@@ -7647,3 +7647,26 @@ so the refusal follows proof verification and is not decided off the header.
 Only the `controller-only` rule can be decided there, since it turns on whether
 the header embeds a capability at all. The answer is the same masked `not-found`
 either way, so the "off the header" clause of the second checkbox was dropped.
+
+### WSS-247: [M] (*) The export's `service.json` is the document `/service` serves
+
+- status: done
+- done: 2026-11-12
+- priority: medium
+- backend: *
+- labels: export, service-description, server-identity
+- discovered-from: the spec-vs-server audit (2026-11-12), read from the code and
+  not reproduced
+- acceptance:
+  - [x] On a server with an identity, the archive's `service.json` carries
+        `instance.exportSigningMethod` and `serverDid` whenever `/service` does,
+        and is byte-identical to that response
+  - [x] The export test that compares the two runs with an identity configured
+  - [x] `docs/service-description.md` and `docs/export-import.md` describe what
+        the archive carries
+
+The Export handler (`SpaceRequest.ts`) calls `buildServiceDescription` with
+`serverUrl`, `originId` and `discloseVersion` only, so the identity members are
+left out. The spec's Export Space operation requires the entry to be the served
+document. `docs/service-description.md` says the archive carries both members.
+The existing test passes because it boots without an identity.
