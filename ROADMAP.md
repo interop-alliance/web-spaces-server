@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 267
+nextAvailableId: 277
 
 <!-- roadmap-order:index:start -->
 
@@ -149,14 +149,27 @@ Ready:
 Ready:
 
 - WSS-46 [H] (pg) Un-skip the Postgres and flag-gated storage-contract tests
+- WSS-267 [H] (*) Clause and container-rule refusal tests reach the check they
+  name
 - WSS-47 [M] (*) Cover `start.ts` and the untested config parsers
 - WSS-9 [M] (*) Open the upstream `minimal-cipher` AEAD-gap issue
 - WSS-10 [M] (*) Open the upstream `edv-client` truncation issue
+- WSS-268 [M] (*) Masked-refusal tests carry a positive control
+- WSS-269 [M] (*) Fix the tests that cannot fail or assert on their own input
+- WSS-271 [M] (*) Cover the pull loop's untested branches and the peer client
+- WSS-272 [M] (*) Cover the authorization paths no test reaches
+- WSS-273 [M] (*) Cover the encryption descriptor checks and the record cipher's
+  AAD
+- WSS-274 [M] (*) Cover the did:webvh log write guards and the import verdicts
 - WSS-202 [L] (*) Pull-loop tests beyond the two-server filesystem case
 - WSS-210 [L] (*) One function decides where a `did:webvh` resolves from
 - WSS-215 [L] (fs) Replace the hand-rolled usage cache in the filesystem backend
   with `LruCache`
 - WSS-261 [L] (*) The log write names a re-sent body to the mirror
+- WSS-270 [L] (*) Remove test cases that repeat another suite
+- WSS-275 [L] (fs) Cover the filesystem clock across a reopen and the open-time
+  sweeps
+- WSS-276 [L] (*) Cover the remaining wire-level and library gaps
 
 Waiting on another repo:
 
@@ -915,15 +928,16 @@ keeps the member layout open for account DIDs, pending this item.
     Resource shapes
   - `@interop/space-archive`: any archive entry or schema that types `createdBy`
   - portable-web-spaces-spec: the `createdBy` member and the `created-by`
-    feature
+    feature (filed as
+    <https://github.com/w3c-ccg/portable-web-spaces-spec/issues/98>)
   - pws-client and the wallet repos: code that compares `createdBy` with one DID
   - pws-conformance-suite: cases that read `createdBy`
 - acceptance:
-  - [ ] Wire decisions recorded in `decisions/` and approved. The proposal on
-        the table is an array of DIDs in every case. A delegated create lists
-        the controller of each delegated capability in the chain, from the root
-        end, ending with the invoker, and leaves the Space controller out. A
-        root invocation lists the invoker alone.
+  - [ ] Wire decisions recorded in `decisions/` and approved. Settled
+        (2026-11-15) is the order of a delegated create's list, which runs from
+        the root end to the invoker. Still proposed are an array of DIDs in
+        every case, the Space controller left out of a delegated create's list,
+        and a root invocation listing the invoker alone.
   - [ ] A Resource, Collection or Space created under a delegated chain serves
         that list as `createdBy`, on both backends
   - [ ] The list is recorded on create only and kept on every later write, as
@@ -1415,6 +1429,8 @@ cross-host invoker research (WSS-162).
     docs/request-pipeline.md
   - `@interop/zcap`: refuse a chain that carries a caveat type the verifier was
     not told it understands, and hand the verified caveats to the caller
+    (proposed upstream as <https://github.com/digitalbazaar/zcap/issues/93>; the
+    fork has issues disabled, so nothing is filed there)
   - `@interop/http-signature-zcap-verify`: pass the understood caveat types
     through
   - `@interop/storage-core`: the write and delete options that carry the
@@ -2333,12 +2349,58 @@ items are in-repo.
         instead of collapsing to a single skip
   - [ ] When `WAS_TEST_DATABASE_URL` is unset the skip is loud about what was
         not run
+  - [ ] The two mixed-backend suites (`test/mixed-backends-api.test.ts`,
+        `test/mixed-backends-replication.test.ts`) run in CI too
 
 The whole Postgres storage-contract suite is gated on `WAS_TEST_DATABASE_URL`
 and silently collapses to one `it.skip` in a normal run. Worse, the contract
 tests that only run when a backend advertises `hardQuota`/`exactUsage` then run
 against _no_ backend at all, since the filesystem harness sets both flags false
 -- the race-condition tests the flags exist for are dormant by default.
+
+The test suite audit of 2026-11-12 measured it: `src/backends/postgres.ts` is at
+1% line coverage and 34 tests skip, since `.github/workflows/ci.yml` has no
+Postgres service. The two mixed-backend suites skip with it, which leaves
+`src/lib/backendMirror.ts` at 58%, `src/lib/exportArchive.ts` at 56% and
+`src/lib/importAcrossBackends.ts` at 68%.
+
+### WSS-267: [H] (*) Clause and container-rule refusal tests reach the check they name
+
+- status: todo
+- priority: high
+- backend: *
+- labels: tests, zcap, client-annex
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] A test reaches each refusal of `ladderInvocationRefusal` (the
+        `put-space-meta` return and the `delete-space` return in
+        `src/lib/clientAnnexClause.ts`), shown by a coverage run. If no chain
+        the predicates admit can reach one, the item records that and what
+        follows for the bound
+  - [ ] "refuses a subtree grant narrowed onward into the DELETE-only shape"
+        (`test/client-annex-clause-api.test.ts`) fails when the invocation-time
+        bound is removed
+  - [ ] The Update Space Metadata refusals, the "Resource in a Space other than
+        the parent's" case and the "parent granted to a DID other than the
+        account" case each either isolate the clause or are renamed for the
+        check that decides them
+  - [ ] "refuses a grant targeting a Resource URL"
+        (`test/container-rule-api.test.ts`) sends a hand-signed request, so the
+        server answers it
+  - [ ] The "target is a prefix" and "slash-less" exact-delete cases use a
+        delegation the zcap library accepts, so the container rule's target
+        check decides them
+
+A refusal is the same masked 404 whichever check raised it, so a test that reads
+only the status does not show which check ran. A coverage run on 2026-11-12
+found that the refusal lines of `ladderInvocationRefusal` never execute in the
+whole suite. The narrowed-DELETE test is described as the bypass the bound has
+to survive, yet an earlier check refuses its chain. The test passes with the
+bound deleted.
+
+The other cases were reported by the audit from the tests' own comments. Those
+comments say the controller-only container rule, the zcap library's attenuation
+check, or the signing client refuses first.
 
 ### WSS-47: [M] (*) Cover `start.ts` and the untested config parsers
 
@@ -2442,6 +2504,215 @@ caller-supplied protected-header params"**
 > reorder/substitution as well.
 
 ---
+
+### WSS-268: [M] (*) Masked-refusal tests carry a positive control
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: tests, zcap, kms
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] The three session-capability refusals in `test/session-zcaps.test.ts`
+        ("cannot write outside its Collection", "cannot PUT the Space Metadata
+        object", "rejects another Space's session capability") assert a server
+        404, not a bare rejection the client may raise itself
+  - [ ] The hand-signed sibling-key and sign-only refusals in
+        `test/kms-key-api.test.ts` sit beside a hand-signed request that
+        succeeds on the same path
+  - [ ] The 90-day TTL refusal in `test/kms-revocation-api.test.ts` sits beside
+        a delegation just under the limit that is accepted
+  - [ ] "POST by a non-controller is masked as not-found"
+        (`test/backends-api.test.ts`) asserts the problem `type` and has a
+        control in the same test
+  - [ ] The "clean 400 not-supported" case in `test/kms-key-api.test.ts` asserts
+        the problem `type`
+  - [ ] The two digest cases in `test/digest-api.test.ts` that assert only what
+        the `detail` does not say also assert the status
+  - [ ] The two `findRoute` cases in `test/space-revocation-api.test.ts` send a
+        request and read the response
+
+A refusal test without a control passes when the request is refused for an
+unrelated reason, such as a malformed signature or a wrong URL. The control is
+the same setup with one variable changed, and it succeeds. Reported by the
+audit. Only the first session-capability case was re-checked.
+
+### WSS-269: [M] (*) Fix the tests that cannot fail or assert on their own input
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: tests
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] `test/server-layout-api.test.ts` "returns the listen origin in canonical
+        form" is removed or compares against the listening address
+  - [ ] `test/webvh-delegation-api.test.ts` "the account DID document was never
+        modified" reads the served log, or is removed
+  - [ ] `test/pagination-api.test.ts` "a cursor past the end" sends such a
+        cursor, or is removed as a copy of the final-page test
+  - [ ] A listing test seeds more than `DEFAULT_PAGE_SIZE` items and reads
+        exactly that many with a `next`. Another reads at most `MAX_PAGE_SIZE`
+        under a larger `limit`
+  - [ ] `test/atomic-file.test.ts` "cleans up the staging file" lists the
+        directory the staging file is written to, and asserts the target is
+        absent
+  - [ ] The `insertRevocation` stub in `test/importRevocations.test.ts` records
+        its calls, and the tests assert there were none
+  - [ ] The two `estimateMinutes` comparisons in `test/perf-lib.test.ts` are
+        strict
+  - [ ] The wrong-KEK and tampered-ciphertext cases in
+        `test/kms-record-cipher.test.ts` match the error, and the KEK id is
+        checked against a literal
+  - [ ] "applies nothing on a second pull"
+        (`test/mixed-backends-replication.test.ts`) compares the feed
+        checkpoint, not `lastAppliedAt`
+  - [ ] "does not compare two lives of one Collection id"
+        (`test/replication-api.test.ts`) runs a pull and asserts what the
+        replica server holds
+  - [ ] The `rejection()` helpers that call `assert.fail` inside their own `try`
+        follow the form in `test/spaces-api.test.ts`
+  - [ ] The two contract cases that return early when `changesSince` is absent
+        assert it exists
+  - [ ] Test names that claim more than the body checks are renamed: the chunk
+        index "both backends agree" case, and the three "refuses the pull" cases
+        in `test/ladder-replica-pull.test.ts` that assert a registration refusal
+
+Each of these passes against a broken implementation. The first four and the
+`atomic-file` case were re-checked against the code. The others are as the audit
+reported them.
+
+The page-size cases seed three items, so the default of 100 and the maximum of
+1000 could both be removed without a failure.
+
+### WSS-271: [M] (*) Cover the pull loop's untested branches and the peer client
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: tests, replication
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] A two-server test covers a listing `next` that names another Space or
+        host, which the loop refuses
+  - [ ] A test covers a Collection the replica server holds in a life that wins
+        over the source's, which the loop marks `skipped`
+  - [ ] A test covers each `stallOfError` mapping through the loop
+        (`quota-exceeded` from a 507 or 413, `container-refused` from a 404)
+  - [ ] A test fails the source several times and reads the back-off delay
+        doubling, stopping at `REPLICATION_BACKOFF_MAX_MS`, and resetting after
+        a success
+  - [ ] A test revokes, and another expires, the pull capability on the source.
+        The loop backs off and applies nothing
+  - [ ] A test covers a Resource-level policy and its tombstone arriving on the
+        replica server
+  - [ ] A test boots a server over a stored unpaused registration and reads a
+        running loop
+  - [ ] `assertBootstrapDelegation` refuses a two-link chain, and a proof signed
+        by a method that is not listed under `capabilityDelegation`
+  - [ ] `PeerClient` has unit tests for an unexpected status, a signed read with
+        no signer, `bodyTooLarge` at `maxBytes`, a non-JSON and a non-object
+        body, an empty 304, and a transport error mid-body
+  - [ ] The decision functions of `src/lib/replicaApply.ts` (`stampWins`,
+        `decideCollectionApply`, `decideResourceApply`, `decideLogApply`,
+        `assertReceivableStamps` and the rest) have unit tests for a stamp tie,
+        a lower stamp, a tombstone over a live record, and a malformed stamp
+
+The coverage run of 2026-11-12 puts `src/sync/replication.ts` at 83% of lines
+and 74% of branches. The first three cases are lines that run confirmed
+unexecuted. `test/peer-client.test.ts` covers the idle timeout only. WSS-202
+(pull-loop tests beyond the two-server filesystem case) holds the governed-log
+case and the delete-and-create-again case, so they are not repeated here.
+
+### WSS-272: [M] (*) Cover the authorization paths no test reaches
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: tests, zcap, policy, kms
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] A revoked capability and an expired one read a public-read Resource
+        through the policy fallback (200). The same capabilities on a private
+        Resource surface the named cause
+  - [ ] An unrecognized policy type at the Resource level denies an anonymous
+        read although the Collection carries `PublicCanRead`
+  - [ ] A tombstoned Resource-level or Collection-level policy falls through to
+        the parent's grant
+  - [ ] A revocation submitted through a ladder-signed chain is tested: an
+        admitted shape is stored, and a shape the clause refuses is the masked
+        404
+  - [ ] A keystore chain one link past `KMS_MAX_CHAIN_LENGTH` is refused, and
+        one at the limit is accepted
+  - [ ] A revoked keystore capability is refused on generate key, list keys and
+        update keystore
+  - [ ] On the keystore and replicas routes, a key other than the invoked
+        capability's controller gets the plain `not-found` for a revoked
+        capability
+  - [ ] The exact-delete container rule is tested with a duplicate action, and
+        with `allowedAction` as a string
+  - [ ] A custom `authorizeProvisioning` that denies is tested on
+        `POST /kms/keystores`, and the Bearer parsing is tested with an empty
+        token and a lowercase scheme
+  - [ ] `serverFaultIn` and `throwIfServerFault` have unit tests: a storage
+        fault in a `cause` chain keeps its 5xx, and a plain verification failure
+        does not
+  - [ ] `KmsRecordCipherError` raised under a key operation is answered with a
+        5xx that carries no key material
+
+Reported by the audit from greps of `test/`, and not re-checked. Each one is a
+branch that decides access or separates a denial from a server fault.
+
+### WSS-273: [M] (*) Cover the encryption descriptor checks and the record cipher's AAD
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: tests, encryption, kms
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] A descriptor whose `scheme` is `constructor`, `__proto__`, `toString` or
+        the empty string is refused, at the library and on the wire
+  - [ ] A test pins what a write to a Collection with a stored but unrecognized
+        scheme does
+  - [ ] A recipient with a missing or empty `header.alg`, an empty `kid`, or a
+        non-string `encrypted_key` is refused, on an epoch recipient and on an
+        `hmac` recipient
+  - [ ] `decryptKeyRecord` rejects a record whose `protected` header, `iv` or
+        `tag` was altered, and one whose recipient `kid` differs from its
+        `kekId`
+
+Reported by the audit and not re-checked. The test helper always supplies all
+three recipient members, so removing one of the checks fails no test.
+`resolveEncryptionProfile` returns `undefined` for an unrecognized stored
+scheme, and the write checks then accept plaintext. Whether that is intended is
+part of the second box.
+
+### WSS-274: [M] (*) Cover the did:webvh log write guards and the import verdicts
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: tests, webvh, import
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] Two concurrent first creates of one `did.jsonl` end as one 201 and one
+        412
+  - [ ] `guardWebvhLogWrite` over a stored log with no `ETag` raises the storage
+        fault
+  - [ ] A foreign log larger than `PEER_WEBVH_LOG_MAX_BYTES` is refused, with
+        the limit read from the config
+  - [ ] `src/lib/webvhBlocklist.ts` has unit tests for its entry parsing,
+        malformed entries included
+  - [ ] Each verdict of `src/lib/importProvenance.ts` other than `verified`
+        strips `createdBy` and advances its own counter. One test per verdict
+        alters a statement's digest, id or signature
+  - [ ] Every `InvalidImportError` in `src/lib/importTar.ts` has a case
+  - [ ] `installImportRevocations` is tested for a duplicate id, an already
+        stored revocation, an invoker that may not revoke, and a server fault
+
+The no-`ETag` guard is confirmed unexecuted by the coverage run of 2026-11-12.
+The others are as the audit reported them.
 
 ### WSS-168: [L] (*) [after CLI-22] `SERVER_URL` move runbook for the server DID log (portable domain move)
 
@@ -2662,6 +2933,98 @@ pays a control-plane read, and every successful one a read of the copy.
 For the copy side, one option is an unconditional whole-log store the backends
 already have internally. That widens the `StorageBackend` surface, so it is the
 optional half.
+
+### WSS-270: [L] (*) Remove test cases that repeat another suite
+
+- status: todo
+- priority: low
+- backend: *
+- labels: tests, cleanup
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] The 405 block of `test/error-registry-api.test.ts` keeps its two unique
+        cases (the same 405 whether or not the Space exists, and the untouched
+        CORS preflight). The others are left to
+        `test/method-refusals-api.test.ts`
+  - [ ] `test/postgres-replica-apply.test.ts` keeps the migration, staging and
+        chunk cases. The registration and apply cases the contract suite already
+        runs on Postgres are removed
+  - [ ] The cursor cases shared by `test/pagination-api.test.ts` and
+        `test/list-pagination-api.test.ts` run as one parametrized suite over
+        the three listings. The per-handler cases stay (404 before 400, the
+        anonymous empty 200)
+  - [ ] `test/wire-contract-api.test.ts` is reduced to the cases no other suite
+        holds, or removed
+  - [ ] The duplicates the audit named are removed in
+        `test/encryption-lib.test.ts`, `test/encryption-descriptor-api.test.ts`,
+        `test/storage.test.ts`, `test/kms-record-encryption.test.ts`,
+        `test/space-type-api.test.ts`, `test/provisioning-gate.test.ts` and
+        `test/config.test.ts`
+  - [ ] The `load` and `deleteLoad` cases in `test/perf-lib.test.ts` do not
+        depend on a 20 to 50 ms wall-clock window
+
+Reported by the audit and not re-checked case by case. Confirm each duplicate
+covers no branch of its own before removing it. `test/perf-lib.test.ts` covers
+the benchmark script under `scripts/performance/`, not the server.
+
+### WSS-275: [L] (fs) Cover the filesystem clock across a reopen and the open-time sweeps
+
+- status: todo
+- priority: low
+- backend: fs
+- labels: tests, backend
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] A test writes, closes, reopens with the physical clock set back, and
+        reads a next stamp above the last one
+  - [ ] `close()` logs a warning and does not throw when the high-water mark
+        cannot be written
+  - [ ] `listChunks` surfaces an error other than `ENOENT`
+  - [ ] `open()` sweeps temp files under `spaces/` and `keystores/`
+  - [ ] No temp file is left after an aborted chunk upload, an aborted multipart
+        upload, or a quota or digest refusal after staging
+  - [ ] A test bounds how far a concurrent burst of writes can pass the soft
+        quota
+
+Reported by the audit and not re-checked. The Postgres backend has the clock
+tests (`test/postgres-write-stamps.test.ts`); the filesystem backend has only
+the unit tests of `src/lib/hlc.ts`.
+
+### WSS-276: [L] (*) Cover the remaining wire-level and library gaps
+
+- status: todo
+- priority: low
+- backend: *
+- labels: tests
+- discovered-from: test suite audit (2026-11-12)
+- acceptance:
+  - [ ] A multipart write with no file part, and one with two, is a 400
+        `invalid-request-body`
+  - [ ] An invalid `resourceId` is a 400 `invalid-id` on GET, HEAD, PUT and
+        DELETE
+  - [ ] The Collection and Resource count quotas answer 507 over HTTP
+  - [ ] A signed write whose body is malformed JSON is answered
+        `invalid-request-body`
+  - [ ] After Delete Space, its Collections and Resources are unreachable, its
+        usage is gone, and a Space created again under the id holds none of the
+        old data
+  - [ ] A test pins what a Resource GET does with a `Range` header
+  - [ ] `coerceQueryLimit` is tested with 0, a negative, a non-number and a very
+        large `limit` on each query profile
+  - [ ] `listsInvocationMethod` in `src/lib/syncIdentity.ts` is tested with a
+        fragment-relative entry, an embedded method, and a matching id over
+        another key. A log that stops verifying between the two reads reports
+        `no-server-did`
+  - [ ] `isFastForward` and `assertGoverningLogAppend` have unit tests for a
+        forked, a shortened and a reordered log
+  - [ ] `readFileIfPresent`, `unlinkIfPresent` and `buildLinkset` have unit
+        tests
+
+The two multipart branches are confirmed unexecuted by the coverage run of
+2026-11-12 (`src/requests/resourceInput.ts`). The others are as the audit
+reported them. WSS-256 (a multipart request with too many parts) holds the
+part-count case, and WSS-47 (cover `start.ts` and the config parsers) holds the
+shutdown paths.
 
 ## Someday / Maybe
 

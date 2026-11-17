@@ -12,6 +12,16 @@
   tag, branch or commit to deploy. A rollback runs the current workflow over a
   previous tag.
 
+### Changed
+
+- Update to `@interop/http-signature-zcap-verify@13.0.0` and
+  `@interop/zcap@12.0.0`. A capability chain that carries a `caveat` no longer
+  verifies, since the server supports no caveat type yet. The request is
+  answered the masked `not-found` (404). The property was ignored before.
+- A capability with a property name that contains `:` or starts with `@`
+  outside `proof` is refused the same way. So is a delegated capability that
+  lists a `@context` URL other than the zcap context or its proof suite's.
+
 ### Fixed
 
 - A Metadata `PUT` with an empty `custom`, or a Resource Metadata `PUT` with
