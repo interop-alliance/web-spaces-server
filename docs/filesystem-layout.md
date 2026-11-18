@@ -166,6 +166,21 @@ which adds a `digest` column to `resources` (nullable, for the same tombstones),
 `chunks` and `chunk_staging`, and refuses a schema holding a live Resource,
 chunk or staged chunk row.
 
+### Version 11: `createdBy` is a list
+
+`createdBy` on a Space, Collection or Resource record is an array of DIDs. The
+step converts nothing. It refuses, with `StoreVersionError`, a data dir holding
+a Space Metadata file, a Collection Metadata file (live or a tombstone), a
+Resource sidecar or a Resource tombstone whose `createdBy` is present and not an
+array, counting the records it found, on every boot and with no conversion step.
+The remedy is to wipe the data dir or restore from an archive. An import keeps a
+`createdBy` only when its provenance statement verifies, which a string from an
+earlier release does not. An empty data dir, or one with no such record, is
+stamped at version 11. The Postgres twin is schema migration 17, which refuses a
+schema holding a `resources` row with `created_by` set or a `spaces` or
+`collections` row whose `metadata` carries a `createdBy` that is not an array,
+then retypes `resources.created_by` to `text[]`.
+
 ## The origin id and the clock mark
 
 `store.json` also carries the store's origin id as its `originId` member (see

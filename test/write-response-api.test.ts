@@ -232,16 +232,16 @@ function describeWriteResponses({
       assert.equal(body.meta, undefined)
       assert.equal(body.contentType, 'application/json')
       assert.equal(body.size, JSON.stringify({ n: 1 }).length)
-      assert.equal(body.createdBy, alice.did)
+      assert.deepEqual(body.createdBy, [alice.did])
       assert.equal(body.createdAt, body.updatedAt)
       assertEtagNamesStamp(response.headers.get('etag'), body)
 
       const doc = await feedDocument('created')
       assert.deepEqual(stampOf(doc), stampOf(body))
-      assert.equal(doc.createdBy, body.createdBy)
+      assert.deepEqual(doc.createdBy, body.createdBy)
       const meta = await readMeta('created')
       assert.equal(meta.createdAt, body.createdAt)
-      assert.equal(meta.createdBy, body.createdBy)
+      assert.deepEqual(meta.createdBy, body.createdBy)
     })
 
     it('an update answers 200 without provenance', async () => {
@@ -322,14 +322,14 @@ function describeWriteResponses({
         json: { n: 2 }
       })
       assert.equal(response.status, 201)
-      assert.equal(response.data.createdBy, bob.did)
+      assert.deepEqual(response.data.createdBy, [bob.did])
       assert.equal(response.data.createdAt, response.data.updatedAt)
 
       const meta = await readMeta('revived')
-      assert.equal(meta.createdBy, bob.did)
+      assert.deepEqual(meta.createdBy, [bob.did])
       assert.equal(meta.createdAt, response.data.createdAt)
       const doc = await feedDocument('revived')
-      assert.equal(doc.createdBy, bob.did)
+      assert.deepEqual(doc.createdBy, [bob.did])
       assert.deepEqual(stampOf(doc), stampOf(response.data))
     })
 
@@ -405,7 +405,7 @@ function describeWriteResponses({
       // The create's body names the Collection's creator, and the update
       // claims nothing.
       assert.equal(createResponse.data.createdAt, stored.createdAt)
-      assert.equal(createResponse.data.createdBy, stored.createdBy)
+      assert.deepEqual(createResponse.data.createdBy, stored.createdBy)
       assert.ok(!updateResponse.data)
       // The update landed last, over the create.
       assert.equal(
@@ -419,7 +419,7 @@ function describeWriteResponses({
       const response = await alice.pws.request({
         url: `${baseServerUrl}space/${spaceId}/`,
         method: 'POST',
-        json: { id: newId, name: 'Fresh', createdBy: 'did:key:zIgnored' }
+        json: { id: newId, name: 'Fresh', createdBy: ['did:key:zIgnored'] }
       })
       assert.equal(response.status, 201)
       const { data: stored } = await alice.pws.request({
@@ -427,7 +427,7 @@ function describeWriteResponses({
         method: 'GET'
       })
       assert.deepEqual(response.data, stored)
-      assert.equal(response.data.createdBy, alice.did)
+      assert.deepEqual(response.data.createdBy, [alice.did])
     })
 
     it('Create Space answers with the stored object', async () => {

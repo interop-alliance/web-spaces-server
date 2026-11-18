@@ -722,7 +722,7 @@ describe('revisions descriptor API', () => {
 
       const healed = await putRaw(docUrl, '{"v":2}')
       assert.equal(healed.status, 201)
-      assert.equal(healed.data.createdBy, alice.did)
+      assert.deepEqual(healed.data.createdBy, [alice.did])
       assert.equal(healed.data.createdAt, healed.data.updatedAt)
       const read = await alice.pws.request({
         url: docUrl,

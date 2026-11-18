@@ -27,9 +27,9 @@ import type {
  * object are persisted; `size` is always derived from the stored
  * representation, never duplicated here.
  *
- * `createdBy` is the DID of whoever created the Resource (spec "Resource
- * Metadata Data Model"): an OPTIONAL server-managed property, absent when no
- * creator was recorded.
+ * `createdBy` is the list of DIDs of the delegation chain the Resource was
+ * created under, the invoker last (spec "Resource Metadata Data Model"): an
+ * OPTIONAL server-managed property, absent when no creator was recorded.
  *
  * `generation` is the content record's random marker (see `newGeneration`),
  * minted when the sidecar is first written and kept for its whole life,
@@ -115,7 +115,7 @@ export interface MetaSidecar {
   // Server-managed: never sourced from the request body,
   // and not reachable from the user-writable `custom`. Absent when the
   // caller had no invoker.
-  createdBy?: IDID
+  createdBy?: IDID[]
   generation: string
   meta?: ResourceMetaStamp
   // On a plaintext Collection `custom` is `{ name, tags }`; on an encrypted

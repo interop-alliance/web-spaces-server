@@ -20,7 +20,7 @@ import {
   assertBodyController,
   verifyBodyControllerConsent
 } from './controllerConsent.js'
-import { invokerDid } from '../auth-header-hooks.js'
+import { createdByOf } from '../auth-header-hooks.js'
 import { assertCreatableSpaceId, assertValidId } from '../lib/validateId.js'
 import {
   absoluteSpaceUrl,
@@ -288,16 +288,16 @@ export class SpacesRepositoryRequest {
     // Create Space): signed directly by it, or via a delegation chain rooted
     // in it (see `verifyBodyControllerConsent`). Skipped when the provisioning
     // policy already vouched for the request (e.g. a valid onboarding token).
-    if (!request.provisioningAuthorized) {
-      await verifyBodyControllerConsent({
-        request,
-        controller: body.controller,
-        allowedTarget: absoluteUrl({ path: spacesPath(), serverUrl }),
-        allowedAction: 'POST',
-        MismatchError: SpaceControllerMismatchError,
-        requestName: 'Create Space'
-      })
-    }
+    const invocation = request.provisioningAuthorized
+      ? undefined
+      : await verifyBodyControllerConsent({
+          request,
+          controller: body.controller,
+          allowedTarget: absoluteUrl({ path: spacesPath(), serverUrl }),
+          allowedAction: 'POST',
+          MismatchError: SpaceControllerMismatchError,
+          requestName: 'Create Space'
+        })
 
     // POST must never replace an existing Space: the write below is verified
     // against the *body's* controller, so without this check any caller could
@@ -327,9 +327,10 @@ export class SpacesRepositoryRequest {
       written = await storage.writeSpace({
         spaceId,
         spaceMetadata,
-        // A create the provisioning policy granted records no `createdBy`,
-        // since no signature was verified.
-        createdBy: invokerDid(request),
+        // The delegation chain the consent verified. A create the
+        // provisioning policy granted records no `createdBy`, since no
+        // signature was verified.
+        createdBy: createdByOf({ request, invocation }),
         ifNoneMatch: '*'
       })
     } catch (err) {

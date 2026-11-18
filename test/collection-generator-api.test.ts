@@ -153,10 +153,10 @@ describe('Collection generator attribution API', () => {
 
   it('leaves the server-observed createdBy untouched by an attribution write', async () => {
     await create({ id: 'provenance', generator })
-    assert.equal((await readDesc('provenance')).createdBy, alice.did)
+    assert.deepEqual((await readDesc('provenance')).createdBy, [alice.did])
     await put('provenance', { generator: other })
     const desc = await readDesc('provenance')
-    assert.equal(desc.createdBy, alice.did)
+    assert.deepEqual(desc.createdBy, [alice.did])
     assert.deepEqual(desc.generator, other)
   })
 

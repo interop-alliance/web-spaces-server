@@ -8,6 +8,7 @@ import { it, describe } from 'vitest'
 import assert from 'node:assert'
 
 import { mergeAppliedCollectionMetadata } from '../src/lib/replicaApply.js'
+import { storedProjectionOfCollection } from '../src/sync/registration.js'
 import type { CollectionMetadata } from '../src/types.js'
 
 const plain = {} as CollectionMetadata
@@ -51,5 +52,39 @@ describe('mergeAppliedCollectionMetadata fork text', () => {
       mergeAppliedCollectionMetadata({ held: encrypted, incoming: plain }),
       { metadata: encrypted }
     )
+  })
+})
+
+describe('storedProjectionOfCollection createdBy', () => {
+  const base = {
+    id: 'notes',
+    type: ['Collection'],
+    url: 'https://peer.example/space/s/notes/',
+    linkset: []
+  }
+
+  it('leaves out a createdBy that is a string', () => {
+    const stored = storedProjectionOfCollection({
+      ...base,
+      createdBy: 'did:key:z6MkExample'
+    })
+    assert.equal('createdBy' in stored, false)
+  })
+
+  it('leaves out an empty createdBy list', () => {
+    const stored = storedProjectionOfCollection({ ...base, createdBy: [] })
+    assert.equal('createdBy' in stored, false)
+  })
+
+  it('keeps a createdBy list of DIDs and still drops url and linkset', () => {
+    const stored = storedProjectionOfCollection({
+      ...base,
+      createdBy: ['did:key:z6MkExample']
+    })
+    assert.deepStrictEqual(stored, {
+      id: 'notes',
+      type: ['Collection'],
+      createdBy: ['did:key:z6MkExample']
+    })
   })
 })

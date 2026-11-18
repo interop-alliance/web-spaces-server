@@ -143,7 +143,7 @@ describe('Wire-contract smoke (status codes)', () => {
     )
     assert.ok(response.data.createdAt)
     assert.ok(response.data.updatedAt)
-    assert.equal(response.data.createdBy, alice.did)
+    assert.deepEqual(response.data.createdBy, [alice.did])
   })
 
   it('PUT /space/:spaceId/:collectionId/meta creates by id (201), then is a full replacement (204)', async () => {

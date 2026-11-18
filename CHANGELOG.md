@@ -18,9 +18,24 @@
   `@interop/zcap@12.0.0`. A capability chain that carries a `caveat` no longer
   verifies, since the server supports no caveat type yet. The request is
   answered the masked `not-found` (404). The property was ignored before.
-- A capability with a property name that contains `:` or starts with `@`
-  outside `proof` is refused the same way. So is a delegated capability that
-  lists a `@context` URL other than the zcap context or its proof suite's.
+- A capability with a property name that contains `:` or starts with `@` outside
+  `proof` is refused the same way. So is a delegated capability that lists a
+  `@context` URL other than the zcap context or its proof suite's.
+- `createdBy` on a Space, Collection and Resource is an array of DIDs. A create
+  under a delegated capability lists the controller of each delegated capability
+  in the verified chain, root end first and the invoker last, with the Space
+  controller left out. A create under a root invocation lists the invoker alone.
+  A create the provisioning policy granted records none. Later writes,
+  tombstones, export, import of a `verified` object, the provenance statement,
+  the `changes` feed documents and replication carry the list unchanged. A
+  `createdBy` of any other shape is not stored. Import and replication leave it
+  out. This is a breaking change to the served member, the export archive and
+  the provenance statement.
+- The filesystem layout moves to version 11 and the Postgres schema to migration
+  17 (`resources.created_by` becomes `text[]`). Each refuses a store holding a
+  `createdBy` that is not a list with `StoreVersionError`. The remedy is to wipe
+  the store or restore from an archive.
+- Requires `@interop/storage-core` 0.46.0.
 
 ### Fixed
 

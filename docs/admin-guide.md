@@ -356,7 +356,7 @@ the root of the archive, beside `manifest.yml` and `service.json`:
 
 - `provenance.jsonl` -- one signed statement per exported object: the Space
   Metadata object, each Collection Metadata object, and each Resource. A
-  statement names the object's URL, its `createdBy`, `createdAt`, and write
+  statement names the object's URL, its `createdBy` list, `createdAt`, and write
   stamp (`updatedAt`, `updatedAtCounter`, `originId`), a Resource's `/meta`
   record stamp (`meta`), a digest of a Resource's content, and the `versionId`
   of the log entry the key was listed in (`didVersionId`).

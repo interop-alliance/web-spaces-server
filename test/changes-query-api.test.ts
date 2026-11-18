@@ -200,10 +200,10 @@ describe('Collection changes query profile', () => {
 
     const { data } = await queryChanges(alice, 'creator-feed', { limit: 10 })
     const byId = new Map(data.documents.map((doc: any) => [doc.id, doc]))
-    assert.equal((byId.get('keep') as any).createdBy, alice.did)
+    assert.deepEqual((byId.get('keep') as any).createdBy, [alice.did])
     const tombstone = byId.get('remove') as any
     assert.equal(tombstone.deleted, true)
-    assert.equal(tombstone.createdBy, alice.did)
+    assert.deepEqual(tombstone.createdBy, [alice.did])
   })
 
   it('carries the nested meta stamp and custom so a metadata edit replicates', async () => {

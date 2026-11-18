@@ -264,8 +264,8 @@ function isNotFound(err: unknown): boolean {
 }
 
 const CONTROLLER = 'did:key:z6MkContractSuiteController' as IDID
-const CREATOR_ONE = 'did:key:z6MkContractSuiteCreatorOne' as IDID
-const CREATOR_TWO = 'did:key:z6MkContractSuiteCreatorTwo' as IDID
+const CREATOR_ONE: IDID[] = ['did:key:z6MkContractSuiteCreatorOne']
+const CREATOR_TWO: IDID[] = ['did:key:z6MkContractSuiteCreatorTwo']
 
 async function provisionSpace(
   backend: StorageBackend,
@@ -1007,7 +1007,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
       }
 
       /** Creates a fresh Collection in this suite's Space and returns its id. */
-      async function freshCollection(createdBy?: IDID): Promise<string> {
+      async function freshCollection(createdBy?: IDID[]): Promise<string> {
         const collectionId = `col-${crypto.randomUUID()}`
         await harness.backend.writeCollection({
           spaceId,
@@ -1405,7 +1405,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           spaceId,
           collectionId
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
       })
 
       it('deleting the Collection removes its metadata', async () => {
@@ -1490,7 +1490,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
        * Creates a Collection holding one Resource, deletes it, and returns
        * the live validator it had and the tombstone listing item.
        */
-      async function deletedCollection(createdBy?: IDID) {
+      async function deletedCollection(createdBy?: IDID[]) {
         const { backend } = harness
         const collectionId = `gone-${crypto.randomUUID()}`
         const { validator: live } = await backend.writeCollection({
@@ -1690,7 +1690,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           spaceId,
           collectionId
         })
-        assert.equal(stored?.createdBy, CREATOR_TWO)
+        assert.deepEqual(stored?.createdBy, CREATOR_TWO)
         assert.equal(stored?.createdAt, recreated.stamp.updatedAt)
         assert.equal(stored?.custom, undefined)
         // The old life's Resource does not come back.
@@ -2562,7 +2562,72 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           collectionId: 'col',
           resourceId: 'cb-first'
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
+      })
+
+      it('keeps a multi-entry createdBy list verbatim, in order, duplicates included, on a Space, a Collection, a Resource and its feed document', async () => {
+        const { backend } = harness
+        const chain: IDID[] = [...CREATOR_TWO, ...CREATOR_ONE, ...CREATOR_TWO]
+        const chainSpaceId = 'space-created-by-chain'
+        await backend.writeSpace({
+          spaceId: chainSpaceId,
+          spaceMetadata: {
+            id: chainSpaceId,
+            type: ['Space'],
+            controller: CONTROLLER
+          },
+          createdBy: chain
+        })
+        await backend.writeCollection({
+          spaceId: chainSpaceId,
+          collectionId: 'col',
+          collectionMetadata: { id: 'col', type: ['Collection'] },
+          createdBy: chain
+        })
+        await backend.writeResource({
+          spaceId: chainSpaceId,
+          collectionId: 'col',
+          resourceId: 'doc',
+          input: jsonInput({ v: 1 }),
+          createdBy: chain
+        })
+        assert.deepStrictEqual(
+          (await backend.getSpaceMetadata({ spaceId: chainSpaceId }))
+            ?.createdBy,
+          chain
+        )
+        assert.deepStrictEqual(
+          (
+            await backend.getCollectionMetadata({
+              spaceId: chainSpaceId,
+              collectionId: 'col'
+            })
+          )?.createdBy,
+          chain
+        )
+        assert.deepStrictEqual(
+          (
+            await backend.getResourceMetadata({
+              spaceId: chainSpaceId,
+              collectionId: 'col',
+              resourceId: 'doc'
+            })
+          )?.createdBy,
+          chain
+        )
+        const { documents } = await backend.changesSince!({
+          spaceId: chainSpaceId,
+          collectionId: 'col',
+          limit: 10
+        })
+        const document = documents.find(
+          candidate =>
+            candidate.kind === 'resource' && candidate.resourceId === 'doc'
+        )
+        assert.deepStrictEqual(
+          document?.kind === 'resource' && document.createdBy,
+          chain
+        )
       })
 
       it('a second writeResource by a different createdBy does not change it (creator, not last writer)', async () => {
@@ -2579,7 +2644,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           collectionId: 'col',
           resourceId: 'cb-first'
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
       })
 
       it('a later writeResource does not backfill createdBy onto a Resource created without one', async () => {
@@ -2705,7 +2770,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           collectionId: 'col',
           resourceId: 'cb-meta'
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
         assert.deepEqual(metadata?.custom, { createdBy: CREATOR_TWO })
       })
 
@@ -2733,7 +2798,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         // A write over a tombstone is a create: this write's invoker and
         // time, not the deleted Resource's.
         assert.equal(recreated.created, true)
-        assert.equal(recreated.members.createdBy, CREATOR_TWO)
+        assert.deepEqual(recreated.members.createdBy, CREATOR_TWO)
         assert.equal(
           recreated.members.createdAt,
           recreated.validator.stamp.updatedAt
@@ -2743,7 +2808,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           collectionId: 'col',
           resourceId: 'cb-recreate'
         })
-        assert.equal(metadata?.createdBy, CREATOR_TWO)
+        assert.deepEqual(metadata?.createdBy, CREATOR_TWO)
         assert.equal(metadata?.createdAt, recreated.validator.stamp.updatedAt)
       })
 
@@ -2763,7 +2828,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         let metadata = await backend.getSpaceMetadata({
           spaceId: createdBySpaceId
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
 
         // A second write by a different invoker does not change the creator.
         await backend.writeSpace({
@@ -2779,7 +2844,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         metadata = await backend.getSpaceMetadata({
           spaceId: createdBySpaceId
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
         assert.equal(metadata?.name, 'Renamed Created By Space')
       })
 
@@ -2793,14 +2858,14 @@ export function describeStorageBackendContract(options: ContractOptions): void {
             type: ['Space'],
             name: 'Forged createdBy Space',
             controller: CONTROLLER,
-            createdBy: 'did:key:zEVIL'
+            createdBy: ['did:key:zEVIL']
           },
           createdBy: CREATOR_ONE
         })
         const metadata = await backend.getSpaceMetadata({
           spaceId: forgedSpaceId
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
       })
 
       it('writeSpace with no invoker drops a client-supplied createdBy rather than honoring it', async () => {
@@ -2813,7 +2878,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
             type: ['Space'],
             name: 'Forged createdBy Space, no invoker',
             controller: CONTROLLER,
-            createdBy: 'did:key:zEVIL'
+            createdBy: ['did:key:zEVIL']
           }
         })
         const metadata = await backend.getSpaceMetadata({
@@ -2840,7 +2905,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           spaceId,
           collectionId: 'cb-collection'
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
 
         await backend.writeCollection({
           spaceId,
@@ -2856,7 +2921,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           spaceId,
           collectionId: 'cb-collection'
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
         assert.equal(metadata?.name, 'Renamed Created By Collection')
       })
 
@@ -2869,7 +2934,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
             id: 'cb-collection-forged',
             type: ['Collection'],
             name: 'Forged createdBy Collection',
-            createdBy: 'did:key:zEVIL'
+            createdBy: ['did:key:zEVIL']
           },
           createdBy: CREATOR_ONE
         })
@@ -2877,7 +2942,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           spaceId,
           collectionId: 'cb-collection-forged'
         })
-        assert.equal(metadata?.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata?.createdBy, CREATOR_ONE)
       })
     })
 
@@ -2953,10 +3018,9 @@ export function describeStorageBackendContract(options: ContractOptions): void {
 
       it('concurrent writes of one new id each report their own revision', async () => {
         const { backend } = harness
-        const creators = Array.from(
-          { length: 6 },
-          (_, index) => `did:key:z6MkContractSuiteRacer${index}` as IDID
-        )
+        const creators = Array.from({ length: 6 }, (_, index) => [
+          `did:key:z6MkContractSuiteRacer${index}` as IDID
+        ])
         const results = await Promise.all(
           creators.map((createdBy, index) =>
             backend.writeResource({
@@ -2986,7 +3050,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
             result.members.size,
             JSON.stringify({ racer: 'x'.repeat(index) }).length
           )
-          assert.equal(result.members.createdBy, creator)
+          assert.deepEqual(result.members.createdBy, creator)
           assert.equal(result.members.createdAt, creates[0]!.members.createdAt)
         }
         // The feed carries the stamp of the write that landed last.
@@ -3029,7 +3093,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           createdBy: CREATOR_TWO
         })
         assert.equal(revived.created, true)
-        assert.equal(revived.members.createdBy, CREATOR_TWO)
+        assert.deepEqual(revived.members.createdBy, CREATOR_TWO)
         assert.equal(
           revived.members.createdAt,
           revived.validator.stamp.updatedAt
@@ -3074,7 +3138,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           createdBy: CREATOR_ONE
         })
         assert.equal(createdSpace.created, true)
-        assert.equal(createdSpace.metadata.createdBy, CREATOR_ONE)
+        assert.deepEqual(createdSpace.metadata.createdBy, CREATOR_ONE)
         assert.equal(
           createdSpace.metadata.updatedAt,
           createdSpace.validator.stamp.updatedAt
@@ -3099,7 +3163,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           createdBy: CREATOR_TWO
         })
         assert.equal(updatedSpace.created, false)
-        assert.equal(updatedSpace.metadata.createdBy, CREATOR_ONE)
+        assert.deepEqual(updatedSpace.metadata.createdBy, CREATOR_ONE)
         assert.equal(updatedSpace.metadata.name, 'Renamed')
 
         const createdCollection = await backend.writeCollection({
@@ -3130,7 +3194,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           createdBy: CREATOR_TWO
         })
         assert.equal(updatedCollection.created, false)
-        assert.equal(updatedCollection.metadata.createdBy, CREATOR_ONE)
+        assert.deepEqual(updatedCollection.metadata.createdBy, CREATOR_ONE)
         assert.equal(
           updatedCollection.metadata.createdAt,
           createdCollection.metadata.createdAt
@@ -3144,7 +3208,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           createdBy: CREATOR_TWO
         })
         assert.equal(recreated.created, true)
-        assert.equal(recreated.metadata.createdBy, CREATOR_TWO)
+        assert.deepEqual(recreated.metadata.createdBy, CREATOR_TWO)
       })
     })
 
@@ -5081,10 +5145,10 @@ export function describeStorageBackendContract(options: ContractOptions): void {
             document
           ])
         )
-        assert.equal(byId.get('live')?.createdBy, CREATOR_ONE)
+        assert.deepEqual(byId.get('live')?.createdBy, CREATOR_ONE)
         assert.equal(byId.get('live')?.deleted, false)
         // A tombstone replicates its creator too.
-        assert.equal(byId.get('gone')?.createdBy, CREATOR_TWO)
+        assert.deepEqual(byId.get('gone')?.createdBy, CREATOR_TWO)
         assert.equal(byId.get('gone')?.deleted, true)
         assert.equal(byId.get('anon')?.createdBy, undefined)
       })
@@ -8362,7 +8426,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         assert.deepEqual(stampOf(metadata), stamp)
         assert.equal(metadata.generation, 'peerGen1')
         assert.equal(metadata.createdAt, '2026-01-02T03:04:05.000Z')
-        assert.equal(metadata.createdBy, CREATOR_ONE)
+        assert.deepEqual(metadata.createdBy, CREATOR_ONE)
         assert.equal(metadata.epoch, 'epoch-1')
         assert.equal(metadata.writerId, 'writer-1')
         // The validator is the peer's, so the `ETag` is byte-identical.
@@ -8380,7 +8444,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           positionsBefore.every(position => position < document.feedPosition)
         )
         assert.deepEqual(stampOf(document), stamp)
-        assert.equal(
+        assert.deepEqual(
           document.kind === 'resource' && document.createdBy,
           CREATOR_ONE
         )
@@ -9132,7 +9196,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         assert.deepEqual(stampOf(stored), stamp)
         assert.deepEqual(stored.created, created)
         assert.equal(stored.createdAt, created.updatedAt)
-        assert.equal(stored.createdBy, CREATOR_ONE)
+        assert.deepEqual(stored.createdBy, CREATOR_ONE)
         assert.equal(stored.name, 'From the peer')
         assert.equal(
           metadataEtagOf(stored),
@@ -12207,7 +12271,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
           collectionId: 'col',
           resourceId: 'plain'
         })
-        assert.equal(plain.createdBy, CREATOR_ONE)
+        assert.deepEqual(plain.createdBy, CREATOR_ONE)
         assert.equal(plain.createdAt, plainMetadata!.createdAt)
         assert.equal(plain.updatedAt, plainMetadata!.updatedAt)
         assert.equal(plain.updatedAtCounter, plainMetadata!.updatedAtCounter)
@@ -12225,7 +12289,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         // The composite digest: each chunk's digest in index order, as a JSON
         // array of strings (its JCS serialization, since the strings are
         // plain ASCII), digested again.
-        assert.equal(big.createdBy, CREATOR_TWO)
+        assert.deepEqual(big.createdBy, CREATOR_TWO)
         const chunkDigests: string[] = []
         for (let chunkIndex = 0; chunkIndex < 11; chunkIndex++) {
           const chunk = [...files].find(([name]) =>
@@ -12263,7 +12327,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
       let archiveBytes: Buffer
       const sourceSpaceId = 'space-attested'
       const serverUrl = 'https://pws.example'
-      const FORGER = 'did:key:z6MkContractSuiteForger' as IDID
+      const FORGER: IDID[] = ['did:key:z6MkContractSuiteForger']
       const warnings: { msg: string; ids?: string[]; count?: number }[] = []
       let importCount = 0
 
@@ -12483,9 +12547,9 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         // The Space Metadata object, two Collection Metadata objects, and the
         // two live Resources.
         assert.deepStrictEqual(stats.provenance, counts({ verified: 5 }))
-        assert.equal(await createdByOf(spaceId, 'plain'), CREATOR_ONE)
-        assert.equal(await createdByOf(spaceId, 'big'), CREATOR_TWO)
-        assert.equal(await collectionCreatedBy(spaceId), CREATOR_ONE)
+        assert.deepEqual(await createdByOf(spaceId, 'plain'), CREATOR_ONE)
+        assert.deepEqual(await createdByOf(spaceId, 'big'), CREATOR_TWO)
+        assert.deepEqual(await collectionCreatedBy(spaceId), CREATOR_ONE)
       })
 
       it('drops a hand-edited createdBy whose statement was edited to match (proofInvalid)', async () => {
@@ -12506,7 +12570,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         assert.equal(stats.provenance.verified, 4)
         assert.equal(stats.resourcesCreated, 3)
         assert.equal(await createdByOf(spaceId, 'plain'), undefined)
-        assert.equal(await createdByOf(spaceId, 'big'), CREATOR_TWO)
+        assert.deepEqual(await createdByOf(spaceId, 'big'), CREATOR_TWO)
         const logged = warnings.slice(before)
         assert.equal(logged.length, 1)
         assert.match(logged[0]!.msg, /proof does not verify/)
@@ -12596,7 +12660,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         const { spaceId, stats } = await importInto(substituted)
         assert.equal(stats.provenance.contentMismatch, 1)
         assert.equal(await createdByOf(spaceId, 'big'), undefined)
-        assert.equal(await createdByOf(spaceId, 'plain'), CREATOR_ONE)
+        assert.deepEqual(await createdByOf(spaceId, 'plain'), CREATOR_ONE)
       })
 
       it('drops every createdBy from an archive with no provenance.jsonl (unattested)', async () => {
@@ -12799,7 +12863,7 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         })
         assert.ok(big, 'big was imported')
         assert.equal(big.createdAt, sourceBig!.createdAt)
-        assert.equal(big.createdBy, CREATOR_TWO)
+        assert.deepEqual(big.createdBy, CREATOR_TWO)
         assert.deepEqual(big.custom, { name: 'Big' })
       })
     })

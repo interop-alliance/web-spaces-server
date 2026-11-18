@@ -260,8 +260,23 @@ adds the nested `meta` stamp and generation. The body does not carry `custom`,
 `epoch`, or `writerId`.
 
 A Resource created over a tombstone records fresh provenance: this write's
-invoker as `createdBy` and its stamp's time as `createdAt`. The tombstone's
-values stay with the deleted Resource.
+`createdBy` and its stamp's time as `createdAt`. The tombstone's values stay
+with the deleted Resource.
+
+The `createdBy` member is an array of DIDs on a Space, a Collection and a
+Resource. A create under a delegated capability lists the controller of each
+delegated capability in the verified chain, root end first and the invoker last.
+The Space controller is left out, since it controls the root capability. A
+create under a root invocation lists the invoker alone. A create the
+provisioning policy granted records no `createdBy`. The server reads the list
+off the chain that verified (`createdByOf` in `src/auth-header-hooks.ts`), and
+records none when any entry is not a DID it could have verified. A controller
+given as an array of one DID counts as that DID, and an array of any other
+length does not narrow. A DID that repeats in the chain repeats in the list. The
+creating write records the list, and every later write, a tombstone, an export,
+an import of a `verified` object and the replicated apply path keep it
+unchanged. It is provenance and grants nothing. See
+[decision 0007](../decisions/0007-created-by-lists-the-delegation-chain.md).
 
 Create Resource (`POST`), a chunk `PUT`, Delete Resource, and the governing log
 `PUT` keep their own answers. The `did.jsonl` write shares the Resource `PUT`

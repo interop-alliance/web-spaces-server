@@ -138,6 +138,9 @@ A statement is
 `{ id, type, createdBy, createdAt, updatedAt, updatedAtCounter, originId, meta, digest, didVersionId }`.
 
 - `id` is the object's absolute URL on this server.
+- `createdBy` is the object's recorded array of DIDs, as archived (see
+  [validators-and-stamps.md](validators-and-stamps.md)). The statement signs the
+  whole array.
 - The server-managed members are read back off the archived Metadata file or
   `.meta.<id>.json` sidecar, and a member the record lacks is left out.
 - `digest` is the `Digest` header's `mh=` form over the representation's
@@ -203,10 +206,11 @@ A statement is judged on its own.
    statement's `didVersionId`, by verifying the log up to that entry. It must
    list the method under `assertionMethod`, and at most `capabilityInvocation`.
 3. The `eddsa-jcs-2022` proof is verified.
-4. The statement's claims are compared with the archived object: `createdBy`,
-   `createdAt`, the write stamp (`updatedAt`, `updatedAtCounter`, `originId`),
-   and for a Resource its `meta` and its `digest` (the composite chunk digest
-   for a chunked Resource). `meta` is compared member by member.
+4. The statement's claims are compared with the archived object: `createdBy`
+   (the whole array, entry by entry), `createdAt`, the write stamp (`updatedAt`,
+   `updatedAtCounter`, `originId`), and for a Resource its `meta` and its
+   `digest` (the composite chunk digest for a chunked Resource). `meta` is
+   compared member by member.
 
 The archived object's members and digests are computed by the same
 `lib/provenanceStatement.ts` functions export signs with.
@@ -226,7 +230,10 @@ whether or not the destination already holds it.
   `capabilityInvocation`.
 
 The counts are the `provenance` member of the returned `ImportStats`. Outside
-`verified` the object is still imported, with its `createdBy` removed.
+`verified` the object is still imported, with its `createdBy` removed. An
+archived `createdBy` that is not a non-empty array of DID strings is read as no
+claim, so no statement attests it, and it is removed from a `verified` object
+too.
 
 A tombstone carries no statement and is not counted. Its sidecar loses
 `createdBy` too, since the tombstone's change document carries it. A Collection

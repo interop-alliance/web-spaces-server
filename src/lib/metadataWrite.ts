@@ -125,15 +125,16 @@ export function restampImportedMetadata({
  * `stamp`.
  *
  * `createdBy` names the Space's creator, not its last writer: taken from this
- * write's invoker only when this write CREATES the Space, and preserved
- * verbatim afterward -- including preserved-as-absent, so a Space created with
- * no invoker (a token-provisioned create) never has a later writer backfilled
- * into it as its creator.
+ * write's delegation chain only when this write CREATES the Space, and
+ * preserved verbatim afterward -- including preserved-as-absent, so a Space
+ * created with no invoker (a token-provisioned create) never has a later
+ * writer backfilled into it as its creator.
  *
  * @param options {object}
  * @param options.spaceMetadata {SpaceMetadata}   the supplied object
  * @param [options.prior] {StoredSpaceMetadata}   the stored object, if any
- * @param [options.createdBy] {IDID}   this write's invoker
+ * @param [options.createdBy] {IDID[]}   this write's delegation chain, the
+ *   invoker last
  * @param options.stamp {WriteStamp}   this write's stamp
  * @returns {SpaceMetadata}
  */
@@ -145,7 +146,7 @@ export function stampSpaceMetadata({
 }: {
   spaceMetadata: SpaceMetadata
   prior?: StoredSpaceMetadata
-  createdBy?: IDID
+  createdBy?: IDID[]
   stamp: WriteStamp
 }): SpaceMetadata {
   const {
@@ -188,7 +189,8 @@ export function stampSpaceMetadata({
  * @param options.spaceId {string}
  * @param options.spaceMetadata {SpaceMetadata}   the supplied object
  * @param [options.prior] {StoredSpaceMetadata}   the stored object, if any
- * @param [options.createdBy] {IDID}   this write's invoker
+ * @param [options.createdBy] {IDID[]}   this write's delegation chain, the
+ *   invoker last
  * @param [options.ifMatch] {string}
  * @param [options.ifNoneMatch] {HeldValidators}
  * @param [options.assertTransition] {Function}   run against `prior`;
@@ -214,7 +216,7 @@ export async function stampSpaceWrite({
   spaceId: string
   spaceMetadata: SpaceMetadata
   prior?: StoredSpaceMetadata
-  createdBy?: IDID
+  createdBy?: IDID[]
   ifMatch?: string
   ifNoneMatch?: HeldValidators
   assertTransition?: (prior?: StoredSpaceMetadata) => void | Promise<void>
@@ -264,8 +266,8 @@ export async function stampSpaceWrite({
  * discarded here, since the server alone is authoritative for them.
  *
  * `createdBy` names the Collection's creator, not its last writer: taken from
- * this write's invoker only when this write CREATES the Collection, and
- * preserved verbatim afterward -- including preserved-as-absent, so a
+ * this write's delegation chain only when this write CREATES the Collection,
+ * and preserved verbatim afterward -- including preserved-as-absent, so a
  * Collection created with no invoker never has a later writer backfilled into
  * it as its creator. `createdAt` is resolved on the same terms: stamped with
  * this write's clock only when this write creates the Collection, and
@@ -286,7 +288,8 @@ export async function stampSpaceWrite({
  * @param options {object}
  * @param options.collectionMetadata {CollectionMetadata}   the supplied object
  * @param [options.prior] {StoredCollectionMetadata}   the stored object, if any
- * @param [options.createdBy] {IDID}   this write's invoker
+ * @param [options.createdBy] {IDID[]}   this write's delegation chain, the
+ *   invoker last
  * @param options.stamp {WriteStamp}   this write's stamp
  * @returns {CollectionMetadata}
  */
@@ -298,7 +301,7 @@ export function stampCollectionMetadata({
 }: {
   collectionMetadata: CollectionMetadata
   prior?: StoredCollectionMetadata
-  createdBy?: IDID
+  createdBy?: IDID[]
   stamp: WriteStamp
 }): CollectionMetadata {
   const {

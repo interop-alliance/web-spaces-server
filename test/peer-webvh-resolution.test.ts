@@ -691,7 +691,7 @@ describe('peer server did:webvh resolution', () => {
         json: { from: 'agent' }
       })
       assert.equal(written.status, 201)
-      assert.equal((written.data as any).createdBy, agent.did)
+      assert.deepEqual((written.data as any).createdBy, [agent.did])
     })
 
     it('refuses a write under a read-only delegation', async () => {

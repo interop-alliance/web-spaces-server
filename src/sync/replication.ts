@@ -55,6 +55,7 @@
 import type { Readable } from 'node:stream'
 import type { FastifyBaseLogger } from 'fastify'
 import type { ISigner } from '@interop/data-integrity-core'
+import { isCreatedBy } from '@interop/storage-core'
 import {
   MAX_CHUNK_INDEX,
   fileNameFor,
@@ -1475,8 +1476,8 @@ export class ReplicationManager {
       resourceId,
       generation,
       stamp,
-      ...(typeof document.createdBy === 'string' && {
-        createdBy: document.createdBy as IDID
+      ...(isCreatedBy(document.createdBy) && {
+        createdBy: document.createdBy
       }),
       ...(typeof document.writerId === 'string' && {
         writerId: document.writerId
@@ -2562,7 +2563,7 @@ interface ResourceApplyMembers {
   resourceId: string
   generation: string
   stamp: WriteStamp
-  createdBy?: IDID
+  createdBy?: IDID[]
   writerId?: string
 }
 

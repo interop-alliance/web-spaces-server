@@ -102,7 +102,7 @@ export class ResourceRequest {
 
     // Verify (capability-only): creating/updating a Resource requires a valid
     // capability invocation; no access-control-policy fallback.
-    await fetchSpaceAndVerify({
+    const invocation = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: resourcePath({ spaceId, collectionId, resourceId }),
@@ -152,6 +152,7 @@ export class ResourceRequest {
     // `createdBy` of the write (`resourceWriteOptions`).
     const writeOptions = resourceWriteOptions({
       request,
+      invocation,
       spaceId,
       collectionId,
       collectionMetadata,

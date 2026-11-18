@@ -12,10 +12,11 @@
  * observation: the server validates only the shape, stores the object
  * verbatim, and echoes it on reads. Nothing here is ever an authorization
  * input, and the server never defaults or computes a member -- contrast the
- * server-observed, read-only `createdBy`, which under delegated provisioning
- * names the invoker (the wallet user), not the application. The object is
- * writable at CREATE and on UPDATE (so a controller can backfill Collections
- * provisioned before an application recorded its attribution). An update
+ * server-observed, read-only `createdBy`, whose last entry under delegated
+ * provisioning is the invoker (the wallet user), not the application. The
+ * object is writable at CREATE and on UPDATE (so a controller can backfill
+ * Collections provisioned before an application recorded its attribution). An
+ * update
  * carrying `generator` replaces the whole object; an update omitting it keeps
  * the stored one. There is no clear/removal mechanism.
  */

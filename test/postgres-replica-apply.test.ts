@@ -609,7 +609,7 @@ if (!connectionString) {
             generation: 'genDoc',
             stamp,
             createdAt: '2026-10-01T00:00:00.000Z',
-            createdBy: controller,
+            createdBy: [controller],
             writerId: 'writer-a',
             resource: {
               deleted: false,
@@ -633,7 +633,7 @@ if (!connectionString) {
           assert.partialDeepStrictEqual(read, stamp)
           assert.partialDeepStrictEqual(await backend.getResourceMetadata(at), {
             createdAt: '2026-10-01T00:00:00.000Z',
-            createdBy: controller,
+            createdBy: [controller],
             epoch: 'epoch-1',
             writerId: 'writer-a',
             ...stamp
@@ -713,7 +713,7 @@ if (!connectionString) {
             resourceId: 'doc',
             deleted: true,
             writerId: 'writer-b',
-            createdBy: controller,
+            createdBy: [controller],
             ...deletedAt
           })
           // A `/meta` stamped after the tombstone is skipped while it holds.

@@ -24,7 +24,7 @@ import {
   assertBodyController,
   verifyBodyControllerConsent
 } from './controllerConsent.js'
-import { invokerDid } from '../auth-header-hooks.js'
+import { createdByOf } from '../auth-header-hooks.js'
 import { consultProvisioningPolicy } from '../provisioning.js'
 import {
   assertCreatableSpaceId,
@@ -403,7 +403,7 @@ export class SpaceRequest {
     // capability invocation; no access-control-policy fallback. The container
     // rule does not apply here: Collection creation stays exact-target
     // delegable.
-    await fetchSpaceAndVerify({
+    const invocation = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: spacePath({ spaceId }),
@@ -437,7 +437,7 @@ export class SpaceRequest {
         spaceId,
         collectionId,
         collectionMetadata,
-        createdBy: invokerDid(request),
+        createdBy: createdByOf({ request, invocation }),
         // Two creates racing on one client-supplied id both pass the check
         // above; the guarded write lets exactly one through, and the loser's
         // 412 is served as the spec's `id-conflict`, as for Create Space.
@@ -971,6 +971,9 @@ async function authorizeAndWriteSpaceMetadata({
   // as with Create Space via POST -- the invocation must be authorized by
   // the *body's* controller: signed directly by it, or via a delegation
   // chain rooted in it (see `verifyBodyControllerConsent`).
+  // Only a create records `createdBy`: the backend keeps the stored list on
+  // an update.
+  let createdBy: IDID[] | undefined
   if (existingSpaceMetadata) {
     if (request.provisioningAuthorized) {
       // The provisioning gate saw no Space and vouched for a create, but one
@@ -1021,7 +1024,7 @@ async function authorizeAndWriteSpaceMetadata({
     // Skipped when the provisioning policy already vouched for the create
     // (e.g. a valid onboarding token), as on Create Space via POST.
     if (!request.provisioningAuthorized) {
-      await verifyBodyControllerConsent({
+      const invocation = await verifyBodyControllerConsent({
         request,
         controller: body.controller,
         allowedTarget: metaUrl,
@@ -1034,6 +1037,7 @@ async function authorizeAndWriteSpaceMetadata({
         attenuatedRootTarget: spaceUrl,
         MismatchError: SpaceControllerMismatchError
       })
+      createdBy = createdByOf({ request, invocation })
     }
   }
 
@@ -1098,7 +1102,8 @@ async function authorizeAndWriteSpaceMetadata({
   // Compose the Space Metadata object, new or updated: a full replacement of
   // the user-writable members, so a `name` the body omits is removed. `type`
   // is immutable and kept from the stored object on an update (checked
-  // below). `createdBy` is resolved by the backend from the stored object.
+  // below). `createdBy` is resolved by the backend from the stored object,
+  // or, on a create, from the chain the consent verified.
   const spaceMetadata = writableSpaceMetadata({
     id: spaceId,
     type: existingSpaceMetadata?.type ?? requestedType ?? defaultSpaceType(),
@@ -1129,7 +1134,7 @@ async function authorizeAndWriteSpaceMetadata({
   return storage.writeSpace({
     spaceId,
     spaceMetadata,
-    createdBy: invokerDid(request),
+    createdBy,
     ...preconditions,
     // The authorization above holds only for the Space the pre-read saw:
     // absent on a create, or this exact validator on an update.

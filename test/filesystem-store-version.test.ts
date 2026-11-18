@@ -392,10 +392,10 @@ describe('Filesystem store version', () => {
     assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
   })
 
-  it('stamps an empty store at the current version, ten, and boots', async () => {
-    assert.equal(STORE_MIGRATIONS.length, 10)
+  it('stamps an empty store at the current version, eleven, and boots', async () => {
+    assert.equal(STORE_MIGRATIONS.length, 11)
     const backend = await FileSystemBackend.open({ dataDir })
-    assert.equal(await storedVersion(dataDir), 10)
+    assert.equal(await storedVersion(dataDir), 11)
     assert.match(backend.originId, ORIGIN_ID_PATTERN)
   })
 
@@ -809,10 +809,100 @@ describe('Filesystem store version', () => {
     }
   )
 
-  it('stamps a layout-9 store whose live sidecars carry a digest at layout 10, a digestless tombstone included', async () => {
+  it('stamps a layout-9 store whose live sidecars carry a digest at the current layout, a digestless tombstone included', async () => {
     await stageLayout9Sidecars({ resourceDigest: true, chunkDigest: true })
     await FileSystemBackend.open({ dataDir })
+    assert.equal(await storedVersion(dataDir), STORE_MIGRATIONS.length)
+  })
+
+  /**
+   * The record files the layout-11 step reads, by where they sit: the Space
+   * Metadata file and a Collection tombstone in the Space dir, and the
+   * Collection Metadata file, a live Resource sidecar and a Resource
+   * tombstone in the Collection dir.
+   */
+  const LAYOUT_10_RECORDS = {
+    'a Space Metadata file': '.space.meta.some-space.json',
+    'a Collection tombstone': '.collection.meta.gone-col.json',
+    'a Collection Metadata file': 'col/.collection.meta.col.json',
+    'a live Resource sidecar': 'col/.meta.doc.json',
+    'a Resource tombstone': 'col/.tombstone.gone.json'
+  }
+
+  /**
+   * Stamps the store at layout 10 and stages one Space holding every record
+   * file in {@link LAYOUT_10_RECORDS}, each with a `createdBy` list, except
+   * the one named by `stringIn`, which carries a single DID string.
+   * @param options {object}
+   * @param [options.stringIn] {string}   the record file holding the string
+   * @returns {Promise<void>}
+   */
+  async function stageLayout10Records({
+    stringIn
+  }: {
+    stringIn?: string
+  }): Promise<void> {
+    await stamp(dataDir, 10)
+    const spaceDir = path.join(dataDir, 'spaces', 'some-space')
+    await mkdir(path.join(spaceDir, 'col'), { recursive: true })
+    for (const fileName of Object.values(LAYOUT_10_RECORDS)) {
+      await writeFile(
+        path.join(spaceDir, fileName),
+        JSON.stringify({
+          contentType: 'application/json',
+          digest: 'mh=uEiA',
+          createdBy:
+            fileName === stringIn
+              ? 'did:key:z6MkLayoutTenCreator'
+              : ['did:key:z6MkLayoutTenCreator']
+        })
+      )
+    }
+    // A Resource body is not a record, whatever members it carries.
+    await writeFile(
+      path.join(spaceDir, 'col', 'r.body.json'),
+      '{"createdBy":"did:key:z6MkLayoutTenCreator"}'
+    )
+    // A record file that does not parse holds no record.
+    await writeFile(path.join(spaceDir, 'col', '.meta.bad.json'), '{not json')
+  }
+
+  it.each(Object.entries(LAYOUT_10_RECORDS))(
+    'refuses a layout-10 store holding %s whose createdBy is a string, on every boot',
+    async (_label, fileName) => {
+      await stageLayout10Records({ stringIn: fileName })
+      for (let boot = 0; boot < 2; boot++) {
+        await assert.rejects(
+          FileSystemBackend.open({ dataDir }),
+          (err: Error) =>
+            err instanceof StoreVersionError &&
+            err.message.includes('1 Space, Collection or Resource record(s)') &&
+            err.message.includes('Wipe the data directory')
+        )
+        assert.equal(await storedVersion(dataDir), 10)
+      }
+    }
+  )
+
+  it('refuses a layout-10 store holding a createdBy that is neither a string nor a list', async () => {
+    await stageLayout10Records({})
+    await writeFile(
+      path.join(dataDir, 'spaces', 'some-space', 'col', '.meta.doc.json'),
+      JSON.stringify({ createdBy: { did: 'did:key:z6MkLayoutTenCreator' } })
+    )
+    await assert.rejects(
+      FileSystemBackend.open({ dataDir }),
+      (err: Error) =>
+        err instanceof StoreVersionError &&
+        err.message.includes('1 Space, Collection or Resource record(s)')
+    )
     assert.equal(await storedVersion(dataDir), 10)
+  })
+
+  it('stamps a layout-10 store whose records carry createdBy lists at layout 11', async () => {
+    await stageLayout10Records({})
+    await FileSystemBackend.open({ dataDir })
+    assert.equal(await storedVersion(dataDir), 11)
   })
 
   it('refuses a store.json with no integer version', async () => {

@@ -38,8 +38,10 @@ import {
   SPACE_FILE_PREFIX,
   SPACE_POLICY_FILE_NAME,
   parseChunkDirName,
+  parseCollectionMetadataFileName,
   parseMetaSidecarFileName,
   parseResourcePolicyFileName,
+  parseSpaceMetadataFileName,
   spaceMetadataFileName
 } from '@interop/space-archive'
 import {
@@ -52,7 +54,10 @@ import {
 import { isPlainObject } from '../lib/isPlainObject.js'
 import { mapInBatches } from '../lib/mapInBatches.js'
 import { KeyedMutex } from '../lib/keyedMutex.js'
-import { parseSidecarBytes } from '../lib/metaSidecar.js'
+import {
+  parseSidecarBytes,
+  tombstoneSidecarFileId
+} from '../lib/metaSidecar.js'
 import { isValidOriginId, settleOriginId } from '../lib/originId.js'
 import {
   StoreLockTimeoutError,
@@ -164,7 +169,16 @@ export const STORE_MIGRATIONS: StoreMigration[] = [
   // refused: one holds nothing the write-once rule can compare, so a write
   // over it is an ordinary create. A store with no such sidecar passes and is
   // stamped at this version.
-  { kind: 'refuse', run: refuseUndigestedSidecars }
+  { kind: 'refuse', run: refuseUndigestedSidecars },
+  // v11: `createdBy` on a Space, Collection or Resource record is a list of
+  // DIDs, the delegation chain the record was created under, the invoker
+  // last. A record written at an earlier layout carries a single DID string,
+  // and there is no conversion step: a store holding one is refused, every
+  // boot, until it is wiped or restored from an archive (an import keeps a
+  // `createdBy` only when its provenance statement verifies, which an
+  // earlier release's string does not). A store with none passes and is
+  // stamped at this version.
+  { kind: 'refuse', run: refuseNonListCreatedBy }
 ]
 
 /**
@@ -283,6 +297,84 @@ async function lacksDigest(filePath: string): Promise<boolean> {
     sidecar.deleted !== true &&
     typeof sidecar.digest !== 'string'
   )
+}
+
+/**
+ * The layout step that refuses a store holding a `createdBy` that is not a
+ * list (the earlier shape was a single DID string): in a Space Metadata file or a Collection
+ * Metadata file (live or a tombstone) in a Space dir, or in a Collection
+ * Metadata file, a Resource sidecar or a Resource tombstone in a Collection
+ * dir. A file that does not parse holds no record, and a chunk sidecar
+ * carries no `createdBy`, so neither is read as one.
+ * @param options {object}
+ * @param options.dataDir {string}
+ * @returns {Promise<void>}
+ */
+async function refuseNonListCreatedBy({
+  dataDir
+}: {
+  dataDir: string
+}): Promise<void> {
+  const spacesDir = path.join(dataDir, 'spaces')
+  const recordPaths: string[] = []
+  for await (const { spaceDir, entries } of spaceDirs(spacesDir)) {
+    for (const entry of entries) {
+      if (entry.isFile() && mayCarryCreatedBy(entry.name)) {
+        recordPaths.push(path.join(spaceDir, entry.name))
+      }
+    }
+  }
+  for await (const { collectionDir, children } of collectionDirs(spacesDir)) {
+    for (const child of children) {
+      if (child.isFile() && mayCarryCreatedBy(child.name)) {
+        recordPaths.push(path.join(collectionDir, child.name))
+      }
+    }
+  }
+  const verdicts = await mapInBatches({
+    items: recordPaths,
+    map: holdsNonListCreatedBy
+  })
+  const records = verdicts.filter(Boolean).length
+  if (records > 0) {
+    throw new StoreVersionError({
+      detail:
+        `${spacesDir} holds ${records} Space, Collection or Resource ` +
+        'record(s) written before createdBy was a list of DIDs, and there ' +
+        'is no conversion migration. Wipe the data directory, or restore ' +
+        'each Space from an export archive into an empty store.'
+    })
+  }
+}
+
+/**
+ * Whether a file name is that of a record that may carry a `createdBy`: a
+ * Space or Collection Metadata file, a Resource sidecar or a Resource
+ * tombstone.
+ * @param name {string}
+ * @returns {boolean}
+ */
+function mayCarryCreatedBy(name: string): boolean {
+  return (
+    parseSpaceMetadataFileName(name) !== undefined ||
+    parseCollectionMetadataFileName(name) !== undefined ||
+    parseMetaSidecarFileName(name) !== undefined ||
+    tombstoneSidecarFileId(name) !== undefined
+  )
+}
+
+/**
+ * Whether a record file's body is a JSON object whose `createdBy` is present
+ * and not an array. A file gone since the listing, or one that does not
+ * parse, is not one.
+ * @param filePath {string}
+ * @returns {Promise<boolean>}
+ */
+async function holdsNonListCreatedBy(filePath: string): Promise<boolean> {
+  const bytes = await readFileIfPresent(filePath)
+  const createdBy =
+    bytes === undefined ? undefined : parseSidecarBytes(bytes)?.createdBy
+  return createdBy !== undefined && !Array.isArray(createdBy)
 }
 
 /**

@@ -13,7 +13,8 @@
  * base64url sha-256 multihash) over the Resource's content as archived; for a
  * chunked Resource it is the same form over the JCS serialization of its
  * chunk digests, in chunk index order. `updatedAt`, `updatedAtCounter` and
- * `originId` are the object's write stamp; a Resource's `meta` is its `/meta`
+ * `originId` are the object's write stamp, and `createdBy` its recorded list of
+ * DIDs, as stored; a Resource's `meta` is its `/meta`
  * record's stamp and generation, present once metadata was written. A Space
  * or Collection Metadata statement carries no `meta` and no `digest`.
  * `didVersionId` names the version of the signing DID's document that lists

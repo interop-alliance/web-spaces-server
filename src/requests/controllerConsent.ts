@@ -15,7 +15,9 @@ import {
   embeddedDelegations,
   isRootInvocation,
   rootTargetOf,
-  verifyRequestZcap
+  verifiedInvocation,
+  verifyRequestZcap,
+  type VerifiedInvocation
 } from '../zcap.js'
 import { InvalidRequestBodyError, type ProblemError } from '../errors.js'
 import { didOfMethodId } from '../lib/validateDid.js'
@@ -150,7 +152,8 @@ function triageDelegatedConsentFailure({
  *   root included (see `verifyZcap`)
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL in
  *   milliseconds (see `verifyZcap`)
- * @returns {Promise<void>}
+ * @returns {Promise<VerifiedInvocation>}   the verified invocation's facts,
+ *   from which a create records its `createdBy` (`createdByOf`)
  */
 export async function verifyBodyControllerConsent({
   request,
@@ -177,7 +180,7 @@ export async function verifyBodyControllerConsent({
   requestName?: string
   maxChainLength?: number
   maxDelegationTtl?: number
-}): Promise<void> {
+}): Promise<VerifiedInvocation> {
   // Every caller already refused a request with no auth headers: the
   // `/spaces/` and `/kms` groups through their auth-header hook (401), and
   // Create Space by Id through its own `assertInvocationPresent` (the masked
@@ -196,7 +199,7 @@ export async function verifyBodyControllerConsent({
     // here as on every other verification path: a delegated provisioning
     // chain may carry a link signed by a self-hosted `did:webvh` method, even
     // though the body's controller (the chain's root) is a `did:key`.
-    await verifyRequestZcap({
+    const result = await verifyRequestZcap({
       request,
       allowedTarget,
       allowedAction,
@@ -210,6 +213,7 @@ export async function verifyBodyControllerConsent({
       maxChainLength,
       maxDelegationTtl
     })
+    return verifiedInvocation({ result })
   } catch (err) {
     if (!rootInvocation) {
       throw new MismatchError({

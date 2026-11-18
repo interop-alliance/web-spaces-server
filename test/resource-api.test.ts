@@ -442,7 +442,7 @@ describe('Resource API', () => {
       assert.equal(meta.custom, undefined)
     })
 
-    it('[signed] GET /meta includes createdBy, the signing DID of the creator', async () => {
+    it('[signed] GET /meta includes createdBy, the signing DID of the creator as a one-entry list', async () => {
       const resourceId = 'meta-created-by'
       await aliceCredentials.put(resourceId, { id: resourceId })
 
@@ -450,7 +450,7 @@ describe('Resource API', () => {
         url: metaUrl(resourceId),
         method: 'GET'
       })
-      assert.equal(meta.createdBy, alice.did)
+      assert.deepEqual(meta.createdBy, [alice.did])
     })
 
     it('[signed] PUT /meta sets custom, surfaced by GET /meta and the listing', async () => {
@@ -556,7 +556,7 @@ describe('Resource API', () => {
         url: metaUrl(resourceId),
         method: 'GET'
       })
-      assert.equal(meta.createdBy, alice.did)
+      assert.deepEqual(meta.createdBy, [alice.did])
       assert.equal(meta.custom.name, 'Some Custom Data')
     })
 

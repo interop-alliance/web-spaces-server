@@ -275,7 +275,7 @@ type Queryable = pg.Pool | pg.PoolClient
 type SpaceMetadataWrite = {
   spaceId: string
   spaceMetadata: SpaceMetadata
-  createdBy?: IDID
+  createdBy?: IDID[]
   ifMatch?: string
   ifNoneMatch?: HeldValidators
   assertTransition?: (prior?: StoredSpaceMetadata) => void | Promise<void>
@@ -334,7 +334,7 @@ interface ResourceRow extends StampColumns {
   custom: ResourceMetadataCustom | Record<string, unknown> | null
   deleted: boolean
   created_at: string
-  created_by: IDID | null
+  created_by: IDID[] | null
   epoch: string | null
   writer_id: string | null
   // The content digest of the stored representation (`lib/contentDigest.ts`);
@@ -1855,8 +1855,8 @@ export class PostgresBackend implements StorageBackend {
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.spaceMetadata {SpaceMetadata}
-   * @param [options.createdBy] {string}   DID of the invoker, recorded as the
-   *   Space's `createdBy` on first write only
+   * @param [options.createdBy] {IDID[]}   the invocation's delegation
+   *   chain, recorded as the Space's `createdBy` on first write only
    * @param [options.ifMatch] {string}   an `If-Match` compare-and-swap on the
    *   current `ETag`; a stale validator throws `PreconditionFailedError` (412)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *`, the guarded
@@ -1883,7 +1883,7 @@ export class PostgresBackend implements StorageBackend {
    * @param options.client {pg.PoolClient}   the caller's transaction
    * @param options.spaceId {string}
    * @param options.spaceMetadata {SpaceMetadata}
-   * @param [options.createdBy] {string}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
    * @param [options.assertTransition] {Function}   run against the current
@@ -2076,8 +2076,8 @@ export class PostgresBackend implements StorageBackend {
    * @param options.collectionMetadata {CollectionMetadataInput}   the object
    *   to persist, or the request layer's composition callback, run against
    *   the row just read under its lock, the history log columns included
-   * @param [options.createdBy] {string}   DID of the invoker, recorded as the
-   *   Collection's `createdBy` on first write only
+   * @param [options.createdBy] {IDID[]}   the invocation's delegation
+   *   chain, recorded as the Collection's `createdBy` on first write only
    * @param [options.ifMatch] {string}   an `If-Match` compare-and-swap on the
    *   current `ETag`; a stale validator throws `PreconditionFailedError` (412)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *`, the guarded
@@ -2098,7 +2098,7 @@ export class PostgresBackend implements StorageBackend {
     spaceId: string
     collectionId: string
     collectionMetadata: CollectionMetadataInput
-    createdBy?: IDID
+    createdBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<MetadataWriteResult<CollectionMetadata>> {
@@ -3010,9 +3010,9 @@ export class PostgresBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param options.input {ResourceInput}
-   * @param [options.createdBy] {string}   DID of the invoker, recorded as the
-   *   Resource's `createdBy` by the write that creates it (over a tombstone
-   *   included)
+   * @param [options.createdBy] {IDID[]}   the invocation's delegation
+   *   chain, recorded as the Resource's `createdBy` by the write that
+   *   creates it (over a tombstone included)
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
    * @returns {Promise<ResourceWriteResult>}   the Resource's new content
@@ -3035,7 +3035,7 @@ export class PostgresBackend implements StorageBackend {
     collectionId: string
     resourceId: string
     input: ResourceInput
-    createdBy?: IDID
+    createdBy?: IDID[]
     epoch?: string
     writerId?: string
     immutable?: true | ImmutableUnder
@@ -5834,7 +5834,7 @@ export class PostgresBackend implements StorageBackend {
    * @param options.generation {string}
    * @param options.stamp {WriteStamp}
    * @param [options.createdAt] {string}
-   * @param [options.createdBy] {IDID}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.writerId] {string}
    * @param options.resource {object}   the received representation, or the
    *   tombstone's last-known content type
@@ -5862,7 +5862,7 @@ export class PostgresBackend implements StorageBackend {
     generation: string
     stamp: WriteStamp
     createdAt?: string
-    createdBy?: IDID
+    createdBy?: IDID[]
     writerId?: string
     resource:
       | { deleted: false; input: ResourceInput; epoch?: string }
@@ -6062,7 +6062,7 @@ export class PostgresBackend implements StorageBackend {
    * @param options.generation {string}
    * @param options.stamp {WriteStamp}
    * @param [options.createdAt] {string}
-   * @param [options.createdBy] {IDID}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.writerId] {string}
    * @param options.contentType {string}
    * @param options.content {Buffer | null}   `null` for a tombstone
@@ -6093,7 +6093,7 @@ export class PostgresBackend implements StorageBackend {
     generation: string
     stamp: WriteStamp
     createdAt?: string
-    createdBy?: IDID
+    createdBy?: IDID[]
     writerId?: string
     contentType: string
     content: Buffer | null
@@ -6504,7 +6504,7 @@ export class PostgresBackend implements StorageBackend {
    * @param options.generation {string}
    * @param options.stamp {WriteStamp}
    * @param [options.createdAt] {string}
-   * @param [options.createdBy] {IDID}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.writerId] {string}
    * @param options.resource {object}   the received representation
    * @param options.chunks {object}   the staging run and the indexes staged
@@ -6534,7 +6534,7 @@ export class PostgresBackend implements StorageBackend {
     generation: string
     stamp: WriteStamp
     createdAt?: string
-    createdBy?: IDID
+    createdBy?: IDID[]
     writerId?: string
     resource: { input: ResourceInput; epoch?: string }
     chunks: { run: ChunkStagingRun; staged: number[] }

@@ -143,7 +143,7 @@ describe('Provisioning gate', () => {
         },
         body: JSON.stringify({
           ...createSpaceBody(spaceId),
-          createdBy: 'did:key:zAttacker',
+          createdBy: ['did:key:zAttacker'],
           foo: 1
         })
       })

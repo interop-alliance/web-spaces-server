@@ -163,7 +163,7 @@ describe('buildImportPlan', () => {
           type: ['AuxiliarySpace', 'Space'],
           name: 'Archived',
           controller: 'did:key:z6MkArchived',
-          createdBy: 'did:key:z6MkArchived',
+          createdBy: ['did:key:z6MkArchived'],
           url: '/space/S1/',
           backends: [{ id: 'default' }]
         })

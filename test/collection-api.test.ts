@@ -163,7 +163,7 @@ describe('Collections API', () => {
       name: 'Verifiable Credentials',
       type: ['Collection'],
       backend: { id: 'default' },
-      createdBy: alice.did,
+      createdBy: [alice.did],
       url: `/space/${alice.space1.id}/credentials/`,
       linkset: `/space/${alice.space1.id}/credentials/linkset`
     })
@@ -269,7 +269,7 @@ describe('Collections API', () => {
       name: 'Verifiable Credentials',
       type: ['Collection'],
       backend: { id: 'default' },
-      createdBy: alice.did,
+      createdBy: [alice.did],
       url: `/space/${alice.space1.id}/credentials/`,
       linkset: `/space/${alice.space1.id}/credentials/linkset`
     })
@@ -288,11 +288,11 @@ describe('Collections API', () => {
         baseServerUrl
       ).toString(),
       method: 'PUT',
-      json: { name: 'Renamed', createdBy: 'did:key:zEVIL' }
+      json: { name: 'Renamed', createdBy: ['did:key:zEVIL'] }
     })
 
     const description = await aliceSpace.collection(collectionId).describe()
-    assert.equal(description?.createdBy, alice.did)
+    assert.deepEqual(description?.createdBy, [alice.did])
     assert.equal(description?.name, 'Renamed')
   })
 
@@ -598,7 +598,7 @@ describe('Collections API', () => {
       // validator is already minted before any annotation write...
       parseEtagSegments(response.headers.get('etag'), { container: true })
       // ...and the server-managed creator shows, with no annotations.
-      assert.equal(response.data.createdBy, alice.did)
+      assert.deepEqual(response.data.createdBy, [alice.did])
       assert.equal(response.data.custom, undefined)
       // The validator travels only as the header and stays out of the body.
       assert.equal(response.data.metaGeneration, undefined)
@@ -646,8 +646,8 @@ describe('Collections API', () => {
 
       const after = await fetch(new URL(metaUrl(collectionId)))
       assert.equal(after.status, 200)
-      const meta = (await after.json()) as { createdBy?: string }
-      assert.equal(meta.createdBy, alice.did)
+      const meta = (await after.json()) as { createdBy?: string[] }
+      assert.deepEqual(meta.createdBy, [alice.did])
     })
 
     it('[signed] PUT /meta sets custom, round-tripped by GET with a matching ETag', async () => {
@@ -680,7 +680,7 @@ describe('Collections API', () => {
       assert.equal(got.headers.get('etag'), putEtag)
       assert.equal(got.data.custom.name, 'Trip Photos')
       assert.deepEqual(got.data.custom.tags, { app: 'gallery' })
-      assert.equal(got.data.createdBy, alice.did)
+      assert.deepEqual(got.data.createdBy, [alice.did])
       assert.ok(!Number.isNaN(Date.parse(got.data.createdAt)))
       assert.ok(!Number.isNaN(Date.parse(got.data.updatedAt)))
     })
@@ -732,7 +732,7 @@ describe('Collections API', () => {
         method: 'PUT',
         json: {
           ...meta,
-          createdBy: 'did:key:zSomeoneElse',
+          createdBy: ['did:key:zSomeoneElse'],
           createdAt: '1999-01-01T00:00:00.000Z',
           custom: { name: 'After' }
         }
@@ -743,7 +743,7 @@ describe('Collections API', () => {
         url: metaUrl(collectionId),
         method: 'GET'
       })
-      assert.equal(after.createdBy, alice.did)
+      assert.deepEqual(after.createdBy, [alice.did])
       assert.notEqual(after.createdAt, '1999-01-01T00:00:00.000Z')
       assert.equal(after.custom.name, 'After')
     })
@@ -766,7 +766,7 @@ describe('Collections API', () => {
       })
       assert.equal(got.data.id, collectionId)
       assert.equal(got.data.custom.name, 'Created by meta')
-      assert.equal(got.data.createdBy, alice.did)
+      assert.deepEqual(got.data.createdBy, [alice.did])
     })
 
     it('[signed] PUT /meta with a non-object custom 400s', async () => {

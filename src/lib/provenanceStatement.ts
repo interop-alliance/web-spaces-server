@@ -8,13 +8,14 @@
  * digest a chunked Resource as the JCS serialization of its chunk digests in
  * chunk index order (the forms `lib/contentDigest.ts` defines).
  */
+import { isDeepStrictEqual } from 'node:util'
 import {
   classifyCollectionFile,
   parseChunkIndexSegment
 } from '@interop/space-archive'
 import type { ArchiveEntry, ArchiveFile } from '@interop/space-archive'
-import { isMetaStamp } from '@interop/storage-core'
-import type { ResourceMetaStamp } from '../types.js'
+import { isCreatedBy, isMetaStamp } from '@interop/storage-core'
+import type { IDID, ResourceMetaStamp } from '../types.js'
 import { isEnoent } from './atomicFile.js'
 import { compositeChunkDigest, contentDigestOf } from './contentDigest.js'
 import { isPlainObject } from './isPlainObject.js'
@@ -26,13 +27,14 @@ export const STORAGE_ATTESTATION_TYPE = 'StorageAttestation'
 
 /**
  * The members a statement attests, as read off the archived object and keyed
- * by the statement's own member names: the creator and creation time, the
- * write stamp of the object's last write (`updatedAt`, `updatedAtCounter`,
- * `originId`), and, on a Resource whose `/meta` record exists, that record's
- * own stamp and generation (`meta`).
+ * by the statement's own member names: the creator's delegation chain
+ * (`createdBy`, a list of DIDs) and creation time, the write stamp of the
+ * object's last write (`updatedAt`, `updatedAtCounter`, `originId`), and, on
+ * a Resource whose `/meta` record exists, that record's own stamp and
+ * generation (`meta`).
  */
 export type Claims = {
-  createdBy?: string
+  createdBy?: IDID[]
   createdAt?: string
   updatedAt?: string
   updatedAtCounter?: number
@@ -54,9 +56,10 @@ export const CLAIM_MEMBERS = [
 
 /**
  * Whether a statement's member equals the claim read off the archived object.
- * Every claim is a string or an integer, compared exactly, except `meta`,
- * compared member by member over its four members. An absent claim matches an
- * absent member only.
+ * Every claim is a string or an integer, compared exactly, except `createdBy`,
+ * a list of DIDs compared entry by entry in order, and `meta`, compared member
+ * by member over its four members. An absent claim matches an absent member
+ * only.
  * @param options {object}
  * @param options.member {keyof Claims}
  * @param options.stated {unknown}   the statement's value
@@ -72,7 +75,17 @@ export function claimMatches({
   stated: unknown
   claimed: unknown
 }): boolean {
-  if (member !== 'meta' || stated === undefined || claimed === undefined) {
+  if (stated === undefined || claimed === undefined) {
+    return stated === claimed
+  }
+  if (member === 'createdBy') {
+    return (
+      isCreatedBy(stated) &&
+      isCreatedBy(claimed) &&
+      isDeepStrictEqual(stated, claimed)
+    )
+  }
+  if (member !== 'meta') {
     return stated === claimed
   }
   if (!isMetaStamp(stated) || !isMetaStamp(claimed)) {
@@ -91,8 +104,9 @@ export function claimMatches({
  * dot-file's bytes: a Space or Collection Metadata file, whose stamp members
  * are stored bare, or a Resource metadata sidecar. A body that is not a JSON
  * object yields no members, and a member of the wrong type is left out; a
- * `meta` that is not a whole stamp object is left out too. Export signs these
- * members, and import reads them back to check them against a statement.
+ * `createdBy` that is not a list of DIDs, and a `meta` that is not a whole
+ * stamp object, are left out too. Export signs these members, and import
+ * reads them back to check them against a statement.
  * @param options {object}
  * @param options.bytes {Uint8Array}
  * @returns {Claims}
@@ -109,7 +123,7 @@ export function serverFieldsOf({ bytes }: { bytes: Uint8Array }): Claims {
   }
   const { meta } = body
   return {
-    ...(typeof body.createdBy === 'string' && {
+    ...(isCreatedBy(body.createdBy) && {
       createdBy: body.createdBy
     }),
     ...(typeof body.createdAt === 'string' && {

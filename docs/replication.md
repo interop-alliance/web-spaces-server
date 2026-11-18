@@ -338,12 +338,14 @@ by the DID alone, so it survives a change of the local Space that keeps the
 copy. The apply path's write of a `did.jsonl` drops the cached document, so a
 key retired at the origin stops authorizing after the next pull.
 
-Such a DID may be a Space controller, a keystore controller, a delegator, and
-the `createdBy` of a write. `lib/serverIdentity.ts`, `lib/syncIdentity.ts` and
-import provenance stay native-only. `invokerDid` (`createdBy`) also records a
-DID resolved over the network, since the authorization that ran before decided
-its key. A create the provisioning policy granted verifies no signature, so it
-records no `createdBy`.
+Such a DID may be a Space controller, a keystore controller, a delegator, and an
+entry of the `createdBy` list of a write. `lib/serverIdentity.ts`,
+`lib/syncIdentity.ts` and import provenance stay native-only. `createdByOf` also
+records a DID resolved over the network, since the authorization that ran before
+decided its key. The apply path stores the list a peer's Resource or Collection
+record carries when it is a non-empty array of DID strings, and leaves out a
+member of any other shape. A create the provisioning policy granted verifies no
+signature, so it records no `createdBy`.
 
 ## The apply path
 

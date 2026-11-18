@@ -60,6 +60,12 @@ const REPLICA_STAMP_VERSION = 15
  */
 const DIGEST_VERSION = 16
 
+/**
+ * The schema version that made `createdBy` a list of DIDs, retyping
+ * `resources.created_by` to `text[]`.
+ */
+const CREATED_BY_LIST_VERSION = 17
+
 if (!connectionString) {
   describe('PostgresBackend write stamps', () => {
     it.skip('skipped: set WAS_TEST_DATABASE_URL to run the Postgres backend tests', () => {})
@@ -767,6 +773,140 @@ if (!connectionString) {
         policy: { type: 'PublicCanRead' }
       })
       assert.equal(validator.stamp.originId, rebooted.originId)
+    })
+
+    /**
+     * Rolls the schema back to the version before `createdBy` lists, as a
+     * build from before them left it: `resources.created_by` a `text`
+     * column holding each list's one DID, and every stored Space and
+     * Collection Metadata object's list replaced by its one DID.
+     * @returns {Promise<void>}
+     */
+    async function rollBackCreatedByLists(): Promise<void> {
+      await postgresAdminQuery(
+        `ALTER TABLE "${schema}".resources
+           ALTER COLUMN created_by TYPE text USING created_by[1];
+         UPDATE "${schema}".spaces
+            SET metadata = jsonb_set(metadata, '{createdBy}',
+                                     metadata->'createdBy'->0)
+          WHERE metadata ? 'createdBy';
+         UPDATE "${schema}".collections
+            SET metadata = jsonb_set(metadata, '{createdBy}',
+                                     metadata->'createdBy'->0)
+          WHERE metadata ? 'createdBy'`
+      )
+      await postgresAdminQuery(
+        `DELETE FROM "${schema}".schema_migrations WHERE version >= $1`,
+        [CREATED_BY_LIST_VERSION]
+      )
+    }
+
+    it('stores createdBy lists in the text[] column and the Metadata jsonb', async () => {
+      const backend = await boot()
+      const chain = [CONTROLLER, 'did:key:z6MkPostgresCreatedByApp'] as const
+      await backend.writeSpace({
+        spaceId: 'space1',
+        spaceMetadata: {
+          id: 'space1',
+          type: ['Space'],
+          controller: CONTROLLER
+        },
+        createdBy: [...chain]
+      })
+      await backend.writeCollection({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        collectionMetadata: { id: 'notes', type: ['Collection'] },
+        createdBy: [...chain]
+      })
+      await backend.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: { kind: 'json', contentType: 'application/json', data: {} },
+        createdBy: [...chain]
+      })
+      const { rows } = await postgresAdminQuery(
+        `SELECT r.created_by AS resource,
+                s.metadata->'createdBy' AS space,
+                c.metadata->'createdBy' AS collection
+           FROM "${schema}".resources r, "${schema}".spaces s,
+                "${schema}".collections c
+          WHERE r.resource_id = 'doc' AND s.space_id = 'space1'
+            AND c.collection_id = 'notes'`
+      )
+      assert.deepStrictEqual(rows[0], {
+        resource: [...chain],
+        space: [...chain],
+        collection: [...chain]
+      })
+      assert.deepStrictEqual(
+        (
+          await backend.getResourceMetadata({
+            spaceId: 'space1',
+            collectionId: 'notes',
+            resourceId: 'doc'
+          })
+        )?.createdBy,
+        [...chain]
+      )
+    })
+
+    it('refuses a pre-list schema that holds a single-DID createdBy, on every boot', async () => {
+      const backend = await boot()
+      await backend.writeSpace({
+        spaceId: 'space1',
+        spaceMetadata: {
+          id: 'space1',
+          type: ['Space'],
+          controller: CONTROLLER
+        },
+        createdBy: [CONTROLLER]
+      })
+      await backend.writeCollection({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        collectionMetadata: { id: 'notes', type: ['Collection'] },
+        createdBy: [CONTROLLER]
+      })
+      await backend.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: { kind: 'json', contentType: 'application/json', data: {} },
+        createdBy: [CONTROLLER]
+      })
+      await backend.close()
+      backends.splice(backends.indexOf(backend), 1)
+      await rollBackCreatedByLists()
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await assert.rejects(
+          PostgresBackend.open({ connectionString: connectionString!, schema }),
+          (err: unknown) =>
+            err instanceof StoreVersionError &&
+            err.message.includes('3 Space, Collection or Resource row(s)')
+        )
+        assert.equal(await storedSchemaVersion(), CREATED_BY_LIST_VERSION - 1)
+      }
+    })
+
+    it('reshapes a pre-list schema with no createdBy, and boots', async () => {
+      const backend = await boot()
+      await provision(backend)
+      await backend.close()
+      backends.splice(backends.indexOf(backend), 1)
+      await rollBackCreatedByLists()
+
+      const rebooted = await boot()
+      assert.equal(await storedSchemaVersion(), MIGRATIONS.length)
+      const { members } = await rebooted.writeResource({
+        spaceId: 'space1',
+        collectionId: 'notes',
+        resourceId: 'doc',
+        input: { kind: 'json', contentType: 'application/json', data: {} },
+        createdBy: [CONTROLLER]
+      })
+      assert.deepStrictEqual(members.createdBy, [CONTROLLER])
     })
   })
 }

@@ -164,7 +164,7 @@ describe('Server key relationships', () => {
             contentType: 'application/json',
             data: { hello: 'world' }
           },
-          createdBy: 'did:key:z6MkSyncIdentitySuiteCreator' as IDID
+          createdBy: ['did:key:z6MkSyncIdentitySuiteCreator' as IDID]
         })
 
         // Export signing reads the same rule. A refused document gets no

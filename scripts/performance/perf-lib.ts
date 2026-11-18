@@ -1558,7 +1558,7 @@ export async function serialWriteLoad({
 
 /**
  * Writes one Resource per id directly through the backend, several at a
- * time, under `createdBy`.
+ * time, with `[createdBy]` as each Resource's `createdBy`.
  * @param options {object}
  * @param options.backend {StorageBackend}
  * @param options.spaceId {string}
@@ -1593,7 +1593,7 @@ async function fillThroughBackend({
           contentType: 'application/json',
           data: credential(id)
         },
-        createdBy
+        createdBy: [createdBy]
       })
   })
 }
@@ -1628,13 +1628,13 @@ async function seedSpaceThroughBackend({
   await backend.writeSpace({
     spaceId,
     spaceMetadata: { id: spaceId, type: ['Space'], controller },
-    createdBy: controller
+    createdBy: [controller]
   })
   await backend.writeCollection({
     spaceId,
     collectionId,
     collectionMetadata: { id: collectionId, type: ['Collection'] },
-    createdBy: controller
+    createdBy: [controller]
   })
   await fillThroughBackend({
     backend,
@@ -1660,8 +1660,8 @@ async function seedSpaceThroughBackend({
  * (`perf-write-<size>`, `perf-delete-<size>`, `perf-serial-<size>`), each
  * with a single `items` Collection. Every record is written under
  * `controller`, which is what a real signed write over HTTP would have
- * produced: `createdBy` and `controller` match what the request handlers set
- * from `invokerDid(request)`.
+ * produced: `createdBy` (`[controller]`, a root invocation's list) and
+ * `controller` match what the request handlers set from `createdByOf`.
  * @param options {object}
  * @param options.backend {StorageBackend}
  * @param options.sizes {number[]}

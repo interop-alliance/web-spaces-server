@@ -149,7 +149,7 @@ describe('Export provenance (wire level)', () => {
     )
     // Resources are attributed to the invoker who created them.
     for (const statement of statements.slice(2)) {
-      assert.equal(statement.createdBy, alice.did)
+      assert.deepEqual(statement.createdBy, [alice.did])
     }
   })
 })
