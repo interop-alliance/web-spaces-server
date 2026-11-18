@@ -61,6 +61,17 @@ Every document carries the record's write stamp, its `generation`, and its
 position with a new `meta` stamp, and its top-level stamp and `etag` stay the
 content record's.
 
+A `resource` document carries the Resource's `createdBy` when one was recorded.
+It is the array of DIDs the creating write was delegated through, the same value
+a `GET` of the Resource's `/meta` serves, and a tombstone's document keeps it. A
+`/meta` write or a content write by another invoker does not change it. The
+other three kinds carry no `createdBy`, since they carry no body. A puller reads
+a Collection's own list from its Metadata object, and the same shape rule
+applies to it. The pull loop stores a document's `createdBy` only when it is a
+non-empty array of DID strings, and stores the Resource without one otherwise.
+How the list is derived is in
+[validators-and-stamps.md](validators-and-stamps.md) under "Write responses".
+
 A Collection on a server backend other than the control plane is fed from that
 backend, which holds copies of its Metadata object, its governing log and its
 policies. Each copy is written after the control-plane write, so the write takes

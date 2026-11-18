@@ -61,7 +61,10 @@ export interface ImportRevocationScope {
   /**
    * the import's verified invocation, which decides what it may revoke
    */
-  invocation: VerifiedInvocation
+  invocation: Pick<
+    VerifiedInvocation,
+    'rootInvocation' | 'invoker' | 'invokedCapability'
+  >
 }
 
 /**
@@ -86,7 +89,7 @@ function invocationMayRevoke({
   chainControllers,
   revocationUrl
 }: {
-  invocation: VerifiedInvocation
+  invocation: ImportRevocationScope['invocation']
   chainControllers: string[]
   revocationUrl: string
 }): boolean {

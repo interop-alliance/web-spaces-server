@@ -644,9 +644,14 @@ function verifiedRootInvocation({
  * `controller` against. `invokedCapability` is the embedded delegated
  * capability, with its `invocationTarget` and `allowedAction`, and is absent
  * on a root invocation, whose header carries the root capability's id alone.
- * Import Space reads these to decide which archived revocations the
- * invocation could have submitted on the revocation route
- * (`lib/importRevocations.ts`).
+ * `delegatedControllers` is the `controller` of each delegated capability in
+ * the verified chain, in delegation order, the root capability left out: the
+ * invoked capability's controller is the last entry, and a root invocation's
+ * list is empty. It is read off the dereferenced chain the verifier walked,
+ * not off the header, and the create paths record it as `createdBy`
+ * (`createdByOf` in `auth-header-hooks.ts`). Import Space reads the other
+ * facts to decide which archived revocations the invocation could have
+ * submitted on the revocation route (`lib/importRevocations.ts`).
  */
 export interface VerifiedInvocation {
   rootInvocation: boolean
@@ -655,6 +660,7 @@ export interface VerifiedInvocation {
     invocationTarget?: string
     allowedAction?: string | string[]
   }
+  delegatedControllers: Array<string | string[]>
 }
 
 /**
@@ -670,13 +676,17 @@ export function verifiedInvocation({
 }: {
   result: VerifyCapabilityInvocationResult
 }): VerifiedInvocation {
-  const { capability, invoker } = result
+  const { capability, invoker, dereferencedChain = [] } = result
   return {
     rootInvocation: verifiedRootInvocation({ result }),
     ...(invoker !== undefined && { invoker }),
     ...(isPlainObject(capability) && {
       invokedCapability: capability as VerifiedInvocation['invokedCapability']
-    })
+    }),
+    // Index 0 is the root capability, whose controller is the scope's own.
+    delegatedControllers: dereferencedChain
+      .slice(1)
+      .map(link => link.controller)
   }
 }
 

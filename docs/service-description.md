@@ -19,13 +19,13 @@ The core entry sits under the `https://w3id.org/pws` identifier. It names the
 spec version this server speaks (`0.5`), the Spaces Repository URL, and the
 `features` tokens naming the optional sections of the core spec this server
 serves, `changes-query` among them. The `created-by` token says the server
-records `createdBy` on every Resource, Collection, and Space created under a
-capability invocation. The `encryption` token says the server implements the
-Collection `encryption` descriptor as the spec's "Encryption Scheme Registry"
-section defines it: it recognizes the `edv` scheme, validates every write into a
-Collection declaring it against the envelope profile, refuses a scheme or
-version it does not recognize, keeps the descriptor creation-only, and checks
-its key-epoch and `hmac` members.
+records `createdBy`, a list of DIDs, on every Resource, Collection, and Space
+created under a capability invocation. The `encryption` token says the server
+implements the Collection `encryption` descriptor as the spec's "Encryption
+Scheme Registry" section defines it: it recognizes the `edv` scheme, validates
+every write into a Collection declaring it against the envelope profile, refuses
+a scheme or version it does not recognize, keeps the descriptor creation-only,
+and checks its key-epoch and `hmac` members.
 
 It also carries `originId`, the active backend's origin id, which a replication
 peer reads when it registers (see [replication.md](replication.md)).

@@ -87,9 +87,10 @@ import {
  *   creation-only and version-monotonic (`encryption-immutable`), and its
  *   key-epoch and `hmac` members are checked (`lib/encryption.ts`).
  * - `created-by`: the server records `createdBy` on every Resource,
- *   Collection, and Space created under a capability invocation
- *   (`invokerDid`). A create the provisioning policy granted verifies no
- *   signature and records none.
+ *   Collection, and Space created under a capability invocation: the list of
+ *   DIDs of the verified delegation chain, the invoker last (`createdByOf`).
+ *   A create the provisioning policy granted verifies no signature and
+ *   records none.
  */
 const SERVICE_FEATURES = [
   'listing',

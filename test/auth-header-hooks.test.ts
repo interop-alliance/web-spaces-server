@@ -14,7 +14,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import {
   requireAuthHeaders,
   requireAuthHeadersOrPublicRead,
-  parseAuthHeaders
+  parseAuthHeaders,
+  createdByOf
 } from '../src/auth-header-hooks.js'
 import {
   MissingAuthError,
@@ -148,5 +149,57 @@ describe('parseAuthHeaders', () => {
     assert.ok(thrown instanceof AuthHeaderParseError)
     assert.equal(thrown.statusCode, 400)
     assert.ok(thrown.cause instanceof Error)
+  })
+})
+
+describe('createdByOf', () => {
+  const ALICE = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH'
+  const BOB = 'did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp'
+  const request = {
+    headers: {},
+    method: 'POST',
+    server: { serverUrl: 'http://localhost:3000' }
+  } as unknown as FastifyRequest
+
+  it('reads a controller given as a list of one DID as that DID', () => {
+    assert.deepStrictEqual(
+      createdByOf({
+        request,
+        invocation: {
+          rootInvocation: false,
+          delegatedControllers: [[ALICE], BOB]
+        }
+      }),
+      [ALICE, BOB]
+    )
+  })
+
+  it('records none when a controller is a list of two DIDs or of none', () => {
+    for (const controller of [[ALICE, BOB], []]) {
+      assert.strictEqual(
+        createdByOf({
+          request,
+          invocation: {
+            rootInvocation: false,
+            delegatedControllers: [controller, BOB]
+          }
+        }),
+        undefined
+      )
+    }
+  })
+
+  it('lists the verified invoker alone on a root invocation', () => {
+    assert.deepStrictEqual(
+      createdByOf({
+        request,
+        invocation: {
+          rootInvocation: true,
+          invoker: ALICE,
+          delegatedControllers: []
+        }
+      }),
+      [ALICE]
+    )
   })
 })

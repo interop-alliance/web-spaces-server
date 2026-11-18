@@ -762,7 +762,7 @@ export type FeedDocument = WriteStamp & {
         // with `validator` into the wire `metaEtag`. Absent when no metadata
         // has been written.
         metaValidator?: EtagValidator
-        createdBy?: IDID
+        createdBy?: IDID[]
         // Present only on a live JSON Resource.
         data?: unknown
         // Omitted when unset, never `null`: the handler projects this straight
@@ -949,9 +949,10 @@ export interface StorageBackend {
    * any the supplied document carries are discarded. The server-managed
    * `createdBy` is authoritative, never taken from `spaceMetadata`: the backend
    * drops any value carried in that (client-supplied) document and records
-   * `createdBy` from the first write's invoker, preserving it verbatim on every
-   * later write. Omitting `createdBy` on a first write leaves it unrecorded
-   * rather than letting the body supply one. `ifMatch` / `ifNoneMatch` are
+   * `createdBy` from the first write's delegation chain, preserving it
+   * verbatim on every later write. Omitting `createdBy` on a first write
+   * leaves it unrecorded rather than letting the body supply one. `ifMatch` /
+   * `ifNoneMatch` are
    * evaluated atomically with the write on the same terms as
    * `writeCollection`'s: `ifNoneMatch` is the guarded create (412
    * `precondition-failed` when the Space exists), `ifMatch` the
@@ -963,8 +964,11 @@ export interface StorageBackend {
   writeSpace(options: {
     spaceId: string
     spaceMetadata: SpaceMetadata
-    /** DID of the invoker; recorded as `createdBy` on first write only */
-    createdBy?: IDID
+    /**
+     * The DIDs of the invocation's delegation chain, the invoker last;
+     * recorded as `createdBy` on first write only
+     */
+    createdBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
     /**
@@ -1134,8 +1138,11 @@ export interface StorageBackend {
      * refusal the composition raises from the body.
      */
     collectionMetadata: CollectionMetadataInput
-    /** DID of the invoker; recorded as `createdBy` on first write only */
-    createdBy?: IDID
+    /**
+     * The DIDs of the invocation's delegation chain, the invoker last;
+     * recorded as `createdBy` on first write only
+     */
+    createdBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<MetadataWriteResult<CollectionMetadata>>
@@ -1229,15 +1236,16 @@ export interface StorageBackend {
     resourceId: string
     input: ResourceInput
     /**
-     * DID of the party whose capability invocation authorized this write (the
-     * signing key's DID, fragment stripped). Recorded as the Resource's
+     * The DIDs of the delegation chain the capability invocation that
+     * authorized this write verified under, the invoker last (the signing
+     * key's DID, fragment stripped). Recorded as the Resource's
      * server-managed `createdBy` by the write that creates the Resource (a
      * re-create over a tombstone included) and preserved verbatim by every
      * update, exactly as `createdAt` is -- so it names the creator, not the
-     * last writer. Omitted by callers with no resolved invoker (a direct
+     * last writer. Omitted by callers with no resolved chain (a direct
      * backend call), in which case no `createdBy` is recorded.
      */
-    createdBy?: IDID
+    createdBy?: IDID[]
     /**
      * The client-declared key epoch this content was encrypted under (the
      * `key-epochs` feature). Stored opaquely on the Resource's metadata and
@@ -1573,9 +1581,10 @@ export interface StorageBackend {
    * `resource` document's stamp and validator are its content record's. It
    * also carries the `/meta` record's stamp and generation as `meta` (when a
    * metadata write has occurred) with its `metaValidator` (composed with
-   * `validator` into the wire `metaEtag`), the server-managed `createdBy` (the creator's DID, when one
-   * was recorded -- so provenance replicates and does not have to be fetched
-   * per Resource from `/meta`), and -- so metadata replicates alongside
+   * `validator` into the wire `metaEtag`), the server-managed `createdBy`
+   * (the creator's delegation chain, when one was recorded -- so provenance
+   * replicates and does not have to be fetched per Resource from `/meta`),
+   * and -- so metadata replicates alongside
    * content -- the user-writable `custom` object (the opaque encryption
    * envelope on an encrypted Collection). The validators are the quoted
    * strong validators a replica can send back as `If-Match` without a GET
@@ -2001,7 +2010,7 @@ export interface StorageBackend {
     generation: string
     stamp: WriteStamp
     createdAt?: string
-    createdBy?: IDID
+    createdBy?: IDID[]
     writerId?: string
     resource:
       | { deleted: false; input: ResourceInput; epoch?: string }

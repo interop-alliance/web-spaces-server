@@ -109,7 +109,7 @@ describe('Spaces', () => {
         name: "Alice's Space #1 (Home)",
         type: ['Space'],
         controller: alice.did,
-        createdBy: alice.did,
+        createdBy: [alice.did],
         url: `/space/${alice.space1.id}/`,
         linkset: `/space/${alice.space1.id}/linkset`,
         backends: SERVED_BACKENDS,
@@ -233,13 +233,12 @@ describe('Spaces', () => {
         json: { id: spaceId, name: 'Created Space', controller: alice.did }
       })
       assert.equal(response.status, 201)
-      assert.equal(
-        (response.data as { createdBy?: string }).createdBy,
+      assert.deepEqual((response.data as { createdBy?: string[] }).createdBy, [
         alice.did
-      )
+      ])
 
       const description = await alice.pws.space(spaceId).describe()
-      assert.equal(description?.createdBy, alice.did)
+      assert.deepEqual(description?.createdBy, [alice.did])
     })
 
     it('[root] a PUT whose body carries a forged createdBy does not change the stored value', async () => {
@@ -256,12 +255,12 @@ describe('Spaces', () => {
         json: {
           name: 'Renamed',
           controller: alice.did,
-          createdBy: 'did:key:zEVIL'
+          createdBy: ['did:key:zEVIL']
         }
       })
 
       const description = await alice.pws.space(spaceId).describe()
-      assert.equal(description?.createdBy, alice.did)
+      assert.deepEqual(description?.createdBy, [alice.did])
       assert.equal(description?.name, 'Renamed')
     })
 
@@ -295,7 +294,7 @@ describe('Spaces', () => {
       assert.equal('name' in description!, false)
       // The immutable and server-managed members survive the replacement.
       assert.deepEqual(description?.type, ['Space'])
-      assert.equal(description?.createdBy, alice.did)
+      assert.deepEqual(description?.createdBy, [alice.did])
     })
 
     it('GET a space with no auth headers falls through to policy and 404s (no public policy)', async () => {
@@ -327,7 +326,7 @@ describe('Spaces', () => {
         name: "Alice's Space #1 (Home)",
         type: ['Space'],
         controller: alice.did,
-        createdBy: alice.did,
+        createdBy: [alice.did],
         url: `/space/${alice.space1.id}/`,
         linkset: `/space/${alice.space1.id}/linkset`,
         backends: SERVED_BACKENDS,
@@ -358,7 +357,7 @@ describe('Spaces', () => {
         name: "Alice's Space #1 (Home)",
         type: ['Space'],
         controller: alice.did,
-        createdBy: alice.did,
+        createdBy: [alice.did],
         url: `/space/${alice.space1.id}/`,
         linkset: `/space/${alice.space1.id}/linkset`,
         backends: SERVED_BACKENDS,

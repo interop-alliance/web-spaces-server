@@ -454,7 +454,7 @@ describe('A did:webvh controller resolved from a replicated log', () => {
       signer: account.key.signer()
     })
     assert.equal(written.statusCode, 201, written.payload)
-    assert.equal(written.json().createdBy, account.did)
+    assert.deepEqual(written.json().createdBy, [account.did])
   })
 
   it('creates a Space by id under a chain the replicated DID invokes', async () => {
@@ -475,7 +475,7 @@ describe('A did:webvh controller resolved from a replicated log', () => {
       capability: grant
     })
     assert.equal(created.statusCode, 201, created.payload)
-    assert.equal(created.json().createdBy, account.did)
+    assert.deepEqual(created.json().createdBy, [account.did])
   })
 
   it('stops authorizing a key retired on the origin after the next pull', async () => {

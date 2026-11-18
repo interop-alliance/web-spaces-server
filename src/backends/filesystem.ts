@@ -734,7 +734,7 @@ function carriedSidecarMembers({
  * @param options.stamp {WriteStamp}
  * @param options.generation {string}
  * @param [options.createdAt] {string}
- * @param [options.createdBy] {IDID}
+ * @param [options.createdBy] {IDID[]}
  * @param [options.writerId] {string}
  * @param [options.epoch] {string}
  * @param [options.prior] {MetaSidecar}   the held sidecar
@@ -756,7 +756,7 @@ function appliedLiveSidecar({
   stamp: WriteStamp
   generation: string
   createdAt?: string
-  createdBy?: IDID
+  createdBy?: IDID[]
   writerId?: string
   epoch?: string
   prior?: MetaSidecar
@@ -2379,8 +2379,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.spaceMetadata {SpaceMetadata}
-   * @param [options.createdBy] {string}   DID of the invoker, recorded as the
-   *   Space's `createdBy` on first write only
+   * @param [options.createdBy] {IDID[]}   the invocation's delegation
+   *   chain, recorded as the Space's `createdBy` on first write only
    * @param [options.ifMatch] {string}   an `If-Match` compare-and-swap on the
    *   current `ETag`; a stale validator throws `PreconditionFailedError` (412)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *`, the guarded
@@ -2400,7 +2400,7 @@ export class FileSystemBackend implements StorageBackend {
   }: {
     spaceId: string
     spaceMetadata: SpaceMetadata
-    createdBy?: IDID
+    createdBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
     assertTransition?: (prior?: StoredSpaceMetadata) => void | Promise<void>
@@ -2436,7 +2436,7 @@ export class FileSystemBackend implements StorageBackend {
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.spaceMetadata {SpaceMetadata}
-   * @param [options.createdBy] {string}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
    * @param [options.assertTransition] {Function}
@@ -2456,7 +2456,7 @@ export class FileSystemBackend implements StorageBackend {
   }: {
     spaceId: string
     spaceMetadata: SpaceMetadata
-    createdBy?: IDID
+    createdBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
     assertTransition?: (prior?: StoredSpaceMetadata) => void | Promise<void>
@@ -3701,8 +3701,8 @@ export class FileSystemBackend implements StorageBackend {
    *   to persist, or the request layer's composition callback, run atomically
    *   with the write against the prior object and the Collection's history
    *   log as of the lock
-   * @param [options.createdBy] {string}   DID of the invoker, recorded as the
-   *   Collection's `createdBy` on first write only
+   * @param [options.createdBy] {IDID[]}   the invocation's delegation
+   *   chain, recorded as the Collection's `createdBy` on first write only
    * @param [options.ifMatch] {string}   an `If-Match` compare-and-swap on the
    *   current `ETag`; a stale validator throws `PreconditionFailedError` (412)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *`, the guarded
@@ -3723,7 +3723,7 @@ export class FileSystemBackend implements StorageBackend {
     spaceId: string
     collectionId: string
     collectionMetadata: CollectionMetadataInput
-    createdBy?: IDID
+    createdBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<MetadataWriteResult<CollectionMetadata>> {
@@ -4736,8 +4736,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param options.input {ResourceInput}
-   * @param [options.createdBy] {string}   DID of the invoker, recorded as the
-   *   Resource's `createdBy` on first write only
+   * @param [options.createdBy] {IDID[]}   the invocation's delegation
+   *   chain, recorded as the Resource's `createdBy` on first write only
    * @param [options.ifMatch] {string}   `If-Match` precondition (a quoted ETag)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *` (create-if-absent)
    * @returns {Promise<EtagValidator>}   the Resource's new ETag validator
@@ -4758,7 +4758,7 @@ export class FileSystemBackend implements StorageBackend {
     collectionId: string
     resourceId: string
     input: ResourceInput
-    createdBy?: IDID
+    createdBy?: IDID[]
     epoch?: string
     writerId?: string
     immutable?: true | ImmutableUnder
@@ -4898,7 +4898,7 @@ export class FileSystemBackend implements StorageBackend {
     collectionDir: string
     resourceId: string
     input: ResourceInput
-    createdBy?: IDID
+    createdBy?: IDID[]
     epoch?: string
     writerId?: string
     immutable?: true | ImmutableUnder
@@ -9449,7 +9449,7 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.generation {string}
    * @param options.stamp {WriteStamp}
    * @param [options.createdAt] {string}
-   * @param [options.createdBy] {string}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.writerId] {string}
    * @param options.resource {object}   the received representation, or the
    *   tombstone's last-known content type
@@ -9475,7 +9475,7 @@ export class FileSystemBackend implements StorageBackend {
     generation: string
     stamp: WriteStamp
     createdAt?: string
-    createdBy?: IDID
+    createdBy?: IDID[]
     writerId?: string
     resource:
       | { deleted: false; input: ResourceInput; epoch?: string }
@@ -10306,7 +10306,7 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.generation {string}
    * @param options.stamp {WriteStamp}
    * @param [options.createdAt] {string}
-   * @param [options.createdBy] {string}
+   * @param [options.createdBy] {IDID[]}
    * @param [options.writerId] {string}
    * @param options.resource {object}   the received representation
    * @param options.chunks {object}   the run, and the indexes it moves in
@@ -10332,7 +10332,7 @@ export class FileSystemBackend implements StorageBackend {
     generation: string
     stamp: WriteStamp
     createdAt?: string
-    createdBy?: IDID
+    createdBy?: IDID[]
     writerId?: string
     resource: { input: ResourceInput; epoch?: string }
     chunks: { run: ChunkStagingRun; staged: number[] }

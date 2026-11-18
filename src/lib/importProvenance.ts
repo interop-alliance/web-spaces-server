@@ -229,12 +229,22 @@ export async function applyImportProvenance({
     const metadataBytes = entries.get(
       `${spacePrefix}${collectionId}/${collectionMetadataFileName(collectionId)}`
     )?.body
-    const metadataEarned =
-      metadataBytes !== undefined &&
+    const metadataClaims =
+      metadataBytes === undefined
+        ? undefined
+        : serverFieldsOf({ bytes: metadataBytes })
+    const metadataVerified =
+      metadataClaims !== undefined &&
       (await judge({
         path: collectionMetaPath({ spaceId: sourceSpaceId, collectionId }),
-        claims: serverFieldsOf({ bytes: metadataBytes })
+        claims: metadataClaims
       }))
+    // A `createdBy` is earned only as a claim the statement attests. One of
+    // any other shape than a list of DIDs is read as no claim
+    // (`serverFieldsOf`), so a verified statement says nothing of it and it
+    // is removed.
+    const metadataEarned =
+      metadataVerified && metadataClaims.createdBy !== undefined
     const collectionMetadata = metadataEarned
       ? collection.collectionMetadata
       : withoutCreatedBy(collection.collectionMetadata)
@@ -253,24 +263,29 @@ export async function applyImportProvenance({
     for (const { resourceId, body } of collection.resources) {
       const sidecar = resourceMetadata.get(resourceId)
       const chunkFiles = chunkDirs.get(resourceId)
+      const claims =
+        sidecar === undefined ? {} : serverFieldsOf({ bytes: sidecar })
       const verified = await judge({
         path: resourcePath({
           spaceId: sourceSpaceId,
           collectionId,
           resourceId
         }),
-        claims: sidecar === undefined ? {} : serverFieldsOf({ bytes: sidecar }),
+        claims,
         digest: () =>
           chunkFiles === undefined
             ? fileDigest({ name: resourceId, bytes: body })
             : chunkedDigest(chunkFiles)
       })
-      if (verified) {
+      // As for the Collection Metadata object: a sidecar `createdBy` that
+      // was not read as a claim is not attested.
+      if (verified && claims.createdBy !== undefined) {
         earned.add(resourceId)
       }
     }
     // Every sidecar outside a verified Resource loses its `createdBy`:
-    // unattested Resources, and tombstones, which carry no statement.
+    // unattested Resources, and tombstones, which carry no statement. So
+    // does a verified one whose `createdBy` is not a list of DIDs.
     for (const [resourceId, bytes] of resourceMetadata) {
       if (!earned.has(resourceId)) {
         resourceMetadata.set(

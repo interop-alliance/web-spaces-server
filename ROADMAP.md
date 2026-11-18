@@ -912,14 +912,14 @@ keeps the member layout open for account DIDs, pending this item.
 
 ### WSS-264: [M] (*) [blocks 1] `createdBy` records the delegation chain a record was created under
 
-- status: todo
+- status: in-progress
 - priority: medium
 - backend: *
 - labels: provenance, zcap, wire-contract, spec
 - discovered-from: GitHub issue 40 and its design discussion (2026-11-15)
 - blocks: WSS-265
 - touches:
-  - web-spaces-server (this repo): `src/auth-header-hooks.ts` (`invokerDid`),
+  - web-spaces-server (this repo): `src/auth-header-hooks.ts` (`createdByOf`),
     the create paths of `SpacesRepositoryRequest`, `SpaceRequest` and
     `collectionContext.ts`, both backends, `src/lib/exportProvenance.ts` and
     `src/lib/importProvenance.ts`, the `created-by` feature note in
@@ -931,21 +931,23 @@ keeps the member layout open for account DIDs, pending this item.
     feature (filed as
     <https://github.com/w3c-ccg/portable-web-spaces-spec/issues/98>)
   - pws-client and the wallet repos: code that compares `createdBy` with one DID
-  - pws-conformance-suite: cases that read `createdBy`
+    (filed as pws-client WCL-169, freewallet FW-706 and wallet-core WC-316)
+  - pws-conformance-suite: cases that read `createdBy` (filed as PWSCS-38)
 - acceptance:
   - [ ] Wire decisions recorded in `decisions/` and approved. Settled
         (2026-11-15) is the order of a delegated create's list, which runs from
-        the root end to the invoker. Still proposed are an array of DIDs in
-        every case, the Space controller left out of a delegated create's list,
-        and a root invocation listing the invoker alone.
-  - [ ] A Resource, Collection or Space created under a delegated chain serves
+        the root end to the invoker. Settled (2026-11-17) are an array of DIDs
+        in every case, the Space controller left out of a delegated create's
+        list, and a root invocation listing the invoker alone. Recorded as
+        decision 0007.
+  - [x] A Resource, Collection or Space created under a delegated chain serves
         that list as `createdBy`, on both backends
-  - [ ] The list is recorded on create only and kept on every later write, as
+  - [x] The list is recorded on create only and kept on every later write, as
         the single DID is today
-  - [ ] A create the provisioning policy granted records no `createdBy`
-  - [ ] The export provenance statement carries the list, and import strips it
+  - [x] A create the provisioning policy granted records no `createdBy`
+  - [x] The export provenance statement carries the list, and import strips it
         from an object that is not `verified`
-  - [ ] The export archive and the replicated apply path carry the list wherever
+  - [x] The export archive and the replicated apply path carry the list wherever
         they carry `createdBy` today
   - [ ] The `created-by` documentation and the spec text describe the list
 

@@ -8,6 +8,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { ISigner } from '@interop/data-integrity-core'
 import type { DIDDoc } from '@interop/did-method-webvh'
+import { isCreatedBy } from '@interop/storage-core'
 
 import {
   REPLICATION_IDENTIFIER,
@@ -247,14 +248,19 @@ function isGovernedCollection(served: Record<string, unknown>): boolean {
  * object without the members a server derives at response time. On a
  * Collection under log governance the served `encryption` and `revisions` are
  * derived from the log, which replicates as its own record, so both are left
- * out.
+ * out. A `createdBy` that is not a list of DIDs is left out too, as the
+ * Resource apply path leaves one out.
  * @param served {Record<string, unknown>}   a peer's `GET .../meta` body
  * @returns {CollectionMetadata}
  */
 export function storedProjectionOfCollection(
   served: Record<string, unknown>
 ): CollectionMetadata {
-  const { url: _url, linkset: _linkset, ...rest } = served
+  const { url: _url, linkset: _linkset, createdBy, ...members } = served
+  const rest: Record<string, unknown> = {
+    ...members,
+    ...(isCreatedBy(createdBy) && { createdBy })
+  }
   if (isGovernedCollection(served)) {
     const { encryption: _encryption, revisions: _revisions, ...stored } = rest
     return stored as unknown as CollectionMetadata

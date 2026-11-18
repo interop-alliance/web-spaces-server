@@ -344,7 +344,8 @@ Containment: **SpacesRepository > Space > Collection > Resource**.
   an auxiliary Space from a data Space without a Read Space per item. Its `url`,
   and the `Location` of a newly created Space, carry the trailing slash. The
   object splits in two: its user-writable members are `type` and `name`, and its
-  server-derived members are `createdBy`, `url`, `linkset`, `backends` (the same
+  server-derived members are `createdBy` (the DIDs of the delegation chain it
+  was created under, the invoker last), `url`, `linkset`, `backends` (the same
   listing `GET /space/:spaceId/backends` serves, carried here so a reader learns
   it without a second request) and `replicas` (each replica registration's
   `fromSpace`, `toSpace` and `role`, with no registration id and no capability).

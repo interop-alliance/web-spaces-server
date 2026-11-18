@@ -8,7 +8,7 @@
  * Resource- and chunk-level handlers share.
  */
 import type { FastifyRequest } from 'fastify'
-import { invokerDid } from '../auth-header-hooks.js'
+import { createdByOf } from '../auth-header-hooks.js'
 import { resolveBackend } from '../lib/backendRegistry.js'
 import { DEFAULT_BACKEND_ID } from '../lib/serverBackends.js'
 import { parseKeyEpochHeader } from '../lib/keyEpoch.js'
@@ -19,6 +19,7 @@ import { collectionPath, linksetPath } from '../lib/paths.js'
 import { isImmutableCollection } from '../lib/revisions.js'
 import { CollectionNotFoundError, ResourceNotFoundError } from '../errors.js'
 import { withStorageErrors } from '../lib/storageErrors.js'
+import type { VerifiedInvocation } from '../zcap.js'
 import type {
   ChunkMetadata,
   CollectionMetadata,
@@ -195,7 +196,8 @@ export function writeOnceOptions({
  *   refuses a write that would change a live Resource's bytes and answers a
  *   repeat of them with the current `ETag`, atomically with the write (see
  *   {@link writeOnceOptions}).
- * - `createdBy`: the invoker's DID (`invokerDid`).
+ * - `createdBy`: the DIDs of the delegation chain the request verified
+ *   under, the invoker last (`createdByOf`).
  *
  * The Collection's `unique: true` plaintext index declarations are not an
  * option: the backend reads them under its own lock, so a declaration landing
@@ -204,6 +206,8 @@ export function writeOnceOptions({
  * A malformed `Key-Epoch` or `Writer-Id` header is a 400, thrown here.
  * @param options {object}
  * @param options.request {FastifyRequest}   the write request
+ * @param options.invocation {VerifiedInvocation}   the facts of the
+ *   invocation the request verified, as its authorization returned them
  * @param options.spaceId {string}
  * @param options.collectionId {string}
  * @param options.collectionMetadata {CollectionMetadata}   the Collection
@@ -214,12 +218,14 @@ export function writeOnceOptions({
  */
 export function resourceWriteOptions({
   request,
+  invocation,
   spaceId,
   collectionId,
   collectionMetadata,
   requestName
 }: {
   request: FastifyRequest
+  invocation: VerifiedInvocation
   spaceId: string
   collectionId: string
   collectionMetadata: Pick<CollectionMetadata, 'revisions'>
@@ -237,7 +243,7 @@ export function resourceWriteOptions({
     requestName
   })
   return {
-    createdBy: invokerDid(request),
+    createdBy: createdByOf({ request, invocation }),
     epoch,
     writerId,
     ...writeOnceOptions({

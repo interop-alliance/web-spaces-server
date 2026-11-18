@@ -93,9 +93,10 @@ export const MIGRATIONS: Migration[] = [
   -- counter, paired with the 'meta_generation' column added in v4. 'custom'
   -- is the user-writable metadata (or the opaque encryption envelope on an
   -- encrypted Collection).
-  -- 'created_by' is the Resource's creator -- the DID of the invoker of its
-  -- FIRST content write, set once and preserved verbatim thereafter (the
-  -- spec's OPTIONAL 'createdBy'); NULL for a row written by a caller with no
+  -- 'created_by' is the Resource's creator, recorded by its FIRST content
+  -- write: the DID of the invoker here, and since v17 a 'text[]' list of the
+  -- delegation chain's DIDs, the invoker last. It is set once and preserved
+  -- verbatim thereafter (the spec's OPTIONAL 'createdBy'); NULL for a row written by a caller with no
   -- resolved invoker. 'epoch' is the client-declared key epoch the content
   -- was encrypted under (multi-recipient encrypted Collections), stored
   -- opaquely (the server never computes or verifies it); NULL when no epoch
@@ -476,8 +477,50 @@ export const MIGRATIONS: Migration[] = [
   // schema that holds a live Resource, a chunk or a staged chunk. A tombstone
   // row passes with a NULL digest, which the write-once rule reads as
   // nothing to compare.
-  addContentDigests
+  addContentDigests,
+  // v17: 'createdBy' is a list of DIDs, the delegation chain the record was
+  // created under, the invoker last. 'resources.created_by' becomes 'text[]',
+  // and a Space or Collection keeps the list as a JSON array inside its
+  // 'metadata' jsonb. A record written before this version carries a single
+  // DID string, and there is no conversion step: the step refuses a schema
+  // that holds one.
+  createdByLists
 ]
+
+/**
+ * The v17 step. Refuses a schema holding a `createdBy` that is not a list
+ * (the earlier shape was a single DID string): a `resources` row whose
+ * `created_by` is set (a tombstone included, since it keeps the deleted
+ * Resource's), or a `spaces` or `collections` row whose `metadata` jsonb
+ * carries a `createdBy` that is not an array.
+ * An empty column is then retyped to `text[]`.
+ * @param client {pg.PoolClient}   the migrating transaction's client
+ * @returns {Promise<void>}
+ */
+async function createdByLists(client: pg.PoolClient): Promise<void> {
+  const { rows } = await client.query<{ count: number }>(
+    `SELECT (SELECT COUNT(*) FROM resources WHERE created_by IS NOT NULL)::int
+          + (SELECT COUNT(*) FROM spaces
+              WHERE jsonb_typeof(metadata->'createdBy') <> 'array')::int
+          + (SELECT COUNT(*) FROM collections
+              WHERE jsonb_typeof(metadata->'createdBy') <> 'array')::int
+            AS count`
+  )
+  const count = rows[0]!.count
+  if (count > 0) {
+    throw new StoreVersionError({
+      detail:
+        `The Postgres schema holds ${count} Space, Collection or Resource ` +
+        'row(s) written before createdBy was a list of DIDs, and there is no ' +
+        'conversion migration. Drop the schema, or restore each Space from an ' +
+        'export archive into an empty store.'
+    })
+  }
+  await client.query(`
+    ALTER TABLE resources
+      ALTER COLUMN created_by TYPE text[] USING NULL;
+  `)
+}
 
 /**
  * The v16 step. Refuses a schema that holds a live Resource row, a chunk row

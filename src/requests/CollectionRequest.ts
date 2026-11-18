@@ -19,7 +19,7 @@ import {
 import { resolveResourceInput } from './resourceInput.js'
 import { composeCollectionMetadata } from './collectionInput.js'
 import { parseCollectionMetadataBody } from '../lib/collectionMetadataBody.js'
-import { invokerDid } from '../auth-header-hooks.js'
+import { createdByOf } from '../auth-header-hooks.js'
 import { assertValidIds } from '../lib/validateId.js'
 import { readTextBody } from '../lib/requestBody.js'
 import {
@@ -152,7 +152,7 @@ export class CollectionRequest {
     // Verify (capability-only): creating a Resource requires a valid capability
     // invocation; no access-control-policy fallback. The container rule does
     // not apply: a POST adds a member rather than writing the container.
-    await fetchSpaceAndVerify({
+    const invocation = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: collectionPath({ spaceId, collectionId }),
@@ -184,6 +184,7 @@ export class CollectionRequest {
     // `createdBy` of the write (`resourceWriteOptions`).
     const writeOptions = resourceWriteOptions({
       request,
+      invocation,
       spaceId,
       collectionId,
       collectionMetadata,
@@ -472,7 +473,7 @@ export class CollectionRequest {
     // grant does not rewrite the Collection's configuration. The sibling
     // `meta/log` write carries the same rule, and Delete Collection stays
     // controller-only.
-    await fetchSpaceAndVerify({
+    const invocation = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: collectionMetaPath({ spaceId, collectionId }),
@@ -515,7 +516,7 @@ export class CollectionRequest {
       storage.writeCollection({
         spaceId,
         collectionId,
-        createdBy: invokerDid(request),
+        createdBy: createdByOf({ request, invocation }),
         ...parseWritePreconditions(request.headers),
         collectionMetadata: async ({ prior, log }) => {
           const existing = prior && stripMetadataValidator(prior)
