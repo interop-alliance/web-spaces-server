@@ -1,5 +1,13 @@
 # History
 
+## 0.46.2 - TBD
+
+### Fixed
+
+- The Docker image records its git commit. The build takes it from a
+  `GIT_COMMIT` build argument, which both Deploy workflows pass, so `/health` no
+  longer reports a `null` commit. The build no longer prints `git: not found`.
+
 ## 0.46.1 - 2026-11-20
 
 ### Added

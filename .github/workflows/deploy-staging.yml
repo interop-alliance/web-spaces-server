@@ -114,6 +114,7 @@ jobs:
       - name: Deploy
         run: >-
           flyctl deploy --remote-only --app "$FLY_APP" --env
-          "SERVER_URL=$SERVER_URL"
+          "SERVER_URL=$SERVER_URL" --build-arg "GIT_COMMIT=$(git rev-parse
+          HEAD)"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

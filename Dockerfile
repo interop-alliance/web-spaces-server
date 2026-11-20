@@ -14,9 +14,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-# The build context carries no .git, so dist/build-info.json records a null
-# commit. The version and build time are still stamped.
-RUN pnpm run build
+# The build context carries no .git, so the commit that dist/build-info.json
+# records comes from this build argument. Without it the commit is null. The
+# version and build time are stamped either way.
+ARG GIT_COMMIT=""
+RUN GIT_COMMIT="$GIT_COMMIT" pnpm run build
 
 # Runtime stage: production dependencies, dist/, and the static assets.
 FROM node:24-slim

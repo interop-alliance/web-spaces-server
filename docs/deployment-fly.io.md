@@ -298,8 +298,12 @@ to storage.
 
 ## Checking a deployment
 
-`/health` reports the version and build time from `dist/build-info.json`. The
-image is built without `.git`, so the commit reads `null`.
+`/health` reports the version, commit and build time from
+`dist/build-info.json`. The image is built without `.git`, so the commit comes
+from the `GIT_COMMIT` build argument, which both Deploy workflows set to the
+commit they checked out. An image built without the argument reports `null`. To
+set it by hand, pass `--build-arg GIT_COMMIT=$(git rev-parse HEAD)` to
+`flyctl deploy` or `docker build`.
 
 ## Running the image locally
 
