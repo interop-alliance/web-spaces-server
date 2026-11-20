@@ -2554,8 +2554,9 @@ audit. Only the first session-capability case was re-checked.
   - [ ] `test/pagination-api.test.ts` "a cursor past the end" sends such a
         cursor, or is removed as a copy of the final-page test
   - [ ] A listing test seeds more than `DEFAULT_PAGE_SIZE` items and reads
-        exactly that many with a `next`. Another reads at most `MAX_PAGE_SIZE`
-        under a larger `limit`
+        exactly that many with a `next`. Another seeds more than `MAX_PAGE_SIZE`
+        items and, under a larger `limit`, reads exactly `MAX_PAGE_SIZE` with a
+        `next`
   - [ ] `test/atomic-file.test.ts` "cleans up the staging file" lists the
         directory the staging file is written to, and asserts the target is
         absent
