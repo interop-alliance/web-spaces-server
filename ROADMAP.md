@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 277
+nextAvailableId: 278
 
 <!-- roadmap-order:index:start -->
 
@@ -58,8 +58,8 @@ Ready:
 - WSS-64 [M] (*) Default document for public collections (`index.html`)
 - WSS-162 [M] (*) Research verifying zcap invocations signed by a did:webvh
   hosted elsewhere
-- WSS-264 [M] (*) `createdBy` records the delegation chain a record was created
-  under (blocks 1)
+- WSS-277 [M] (*) The spec text describes `createdBy` as the delegation chain
+  list
 - WSS-219 [L] (*) Changing a Collection's `backend.id` once it holds Resources
 - WSS-252 [L] (*) Point the Encrypted Collections entry's `url` at the published
   profile
@@ -67,13 +67,6 @@ Ready:
 - WSS-254 [L] (*) Bound the length of a Space, Collection and Resource id
 - WSS-256 [L] (*) Answer a multipart request with too many parts as
   `invalid-request-body`
-
-Chains:
-
-- WSS-264 [M] (*) `createdBy` records the delegation chain a record was created
-  under
-  - WSS-265 [M] (*) Capability caveats and the `OwnResourcesOnly` caveat (in
-    "Features")
 
 Waiting on another repo:
 
@@ -92,6 +85,7 @@ Ready:
   controller no longer resolves
 - WSS-245 [M] (*) DID-relative invocation targets dereferenced through
   `PathHandler` services
+- WSS-265 [M] (*) Capability caveats and the `OwnResourcesOnly` caveat
 
 Chains:
 
@@ -910,61 +904,27 @@ keeps the member layout open for account DIDs, pending this item.
 
 ---
 
-### WSS-264: [M] (*) [blocks 1] `createdBy` records the delegation chain a record was created under
+### WSS-277: [M] (*) The spec text describes `createdBy` as the delegation chain list
 
-- status: in-progress
+- status: todo
 - priority: medium
 - backend: *
-- labels: provenance, zcap, wire-contract, spec
-- discovered-from: GitHub issue 40 and its design discussion (2026-11-15)
-- blocks: WSS-265
+- labels: provenance, spec
+- discovered-from: WSS-264 (2026-11-20), split off when the server half shipped
 - touches:
-  - web-spaces-server (this repo): `src/auth-header-hooks.ts` (`createdByOf`),
-    the create paths of `SpacesRepositoryRequest`, `SpaceRequest` and
-    `collectionContext.ts`, both backends, `src/lib/exportProvenance.ts` and
-    `src/lib/importProvenance.ts`, the `created-by` feature note in
-    `src/serviceDescription.ts`
-  - `@interop/storage-core`: the `createdBy` type on the Space, Collection and
-    Resource shapes
-  - `@interop/space-archive`: any archive entry or schema that types `createdBy`
-  - portable-web-spaces-spec: the `createdBy` member and the `created-by`
-    feature (filed as
+  - portable-web-spaces-spec: the `createdBy` member of the Space, Collection
+    and Resource data models, their examples, the writer attribution section and
+    the `created-by` feature (filed as
     <https://github.com/w3c-ccg/portable-web-spaces-spec/issues/98>)
-  - pws-client and the wallet repos: code that compares `createdBy` with one DID
-    (filed as pws-client WCL-169, freewallet FW-706 and wallet-core WC-316)
-  - pws-conformance-suite: cases that read `createdBy` (filed as PWSCS-38)
 - acceptance:
-  - [ ] Wire decisions recorded in `decisions/` and approved. Settled
-        (2026-11-15) is the order of a delegated create's list, which runs from
-        the root end to the invoker. Settled (2026-11-17) are an array of DIDs
-        in every case, the Space controller left out of a delegated create's
-        list, and a root invocation listing the invoker alone. Recorded as
-        decision 0007.
-  - [x] A Resource, Collection or Space created under a delegated chain serves
-        that list as `createdBy`, on both backends
-  - [x] The list is recorded on create only and kept on every later write, as
-        the single DID is today
-  - [x] A create the provisioning policy granted records no `createdBy`
-  - [x] The export provenance statement carries the list, and import strips it
-        from an object that is not `verified`
-  - [x] The export archive and the replicated apply path carry the list wherever
-        they carry `createdBy` today
-  - [ ] The `created-by` documentation and the spec text describe the list
+  - [ ] The spec defines `createdBy` as an array of DIDs, in the order decision
+        0007 records, on the Space, Collection and Resource
+  - [ ] The spec's examples and its writer attribution section show the list
+  - [ ] `docs/service-description.md` agrees with the spec text as it landed
 
-`createdBy` holds the DID of the invoker today. Most writes come from an app a
-user delegated to, often under a fresh key per visit, so the member names a key
-that means little to a reader and cannot be matched on a later visit. The chain
-names the user as well as the app.
-
-The list is what the `OwnResourcesOnly` caveat tests (WSS-265). It stays
-provenance on its own terms. Nothing is granted to a DID for appearing in it.
-
-Using DIDs, not capability ids, is deliberate. A grant that is revoked and
-issued again still matches what was created under the earlier one. The zcap
-library limits chain length, which bounds the size of the list.
-
-On a public-read Collection the list shows the delegation structure to any
-reader. A reader cannot tell which entry is the author from the list alone.
+The server records and serves the list since WSS-264 (the delegation chain as
+`createdBy`). The spec still defines the member as one DID, the invoker of the
+creating write.
 
 ### WSS-219: [L] (*) Changing a Collection's `backend.id` once it holds Resources
 
@@ -1415,14 +1375,13 @@ cross-host invoker research (WSS-162).
 
 ---
 
-### WSS-265: [M] (*) [after WSS-264] Capability caveats and the `OwnResourcesOnly` caveat
+### WSS-265: [M] (*) Capability caveats and the `OwnResourcesOnly` caveat
 
 - status: todo
 - priority: medium
 - backend: *
 - labels: zcap, caveat, authorization, wire-contract, spec
 - discovered-from: GitHub issue 40 and its design discussion (2026-11-15)
-- blocked-by: WSS-264
 - touches:
   - web-spaces-server (this repo): `src/zcap.ts` and a new chain inspector
     beside `src/lib/revocations.ts`, `src/lib/containerRule.ts` and
@@ -1445,28 +1404,51 @@ cross-host invoker research (WSS-162).
 - acceptance:
   - [ ] Wire decisions recorded in `decisions/` and approved. Settled in the
         discussion are the `caveat` member of the zcap v1 context holding typed
-        objects, and the type name `OwnResourcesOnly`. Still open are the
-        service description member that lists the understood caveat types, and
-        whether a capability carrying a caveat must be signed with
-        `eddsa-jcs-2022`.
+        objects, and the type name `OwnResourcesOnly`. Settled (2026-11-20) are
+        the service description member, a `zcapCaveats` array on the
+        authorization profile entry beside `zcapCryptosuites`, and the proof
+        suite rule. The member's presence claims the must-understand rule, and
+        each value is a caveat `type` the server enforces. A capability that
+        carries a caveat must be signed with `eddsa-jcs-2022`, and the other
+        links of its chain may use either suite. Not yet recorded in
+        `decisions/`.
   - [ ] A chain with a caveat `type` the server does not understand is refused
         on every route family, the `/kms` routes included, as the masked
         `not-found`
-  - [ ] Under a chain carrying `OwnResourcesOnly`, a `PUT` or `DELETE` on an
-        existing Resource succeeds only when the controller of the capability
-        that carries the caveat appears in the Resource's `createdBy`
-  - [ ] The decision is made inside the write's critical section on both
-        backends
+  - [ ] Under a chain carrying `OwnResourcesOnly`, a request at the URL of an
+        existing Resource, a `GET` and a `HEAD` included, succeeds only when the
+        controller of the capability that carries the caveat appears in the
+        Resource's `createdBy`
+  - [ ] A write or a delete is decided inside the write's critical section on
+        both backends
+  - [ ] A Collection listing under the chain lists only the Resources whose
+        `createdBy` holds that controller, and its `totalItems` counts only
+        those, on both backends
+  - [ ] The same check decides a request at the Resource's `meta` URL and at a
+        chunk URL beneath it
+  - [ ] A `GET` or `HEAD` that describes a container is unaffected by the
+        caveat. That covers the Collection Metadata and its governing history
+        log, the Space Metadata, the Space listing, the `linkset` of either, the
+        Collection's `backend` and the Space's `backends` listing.
+  - [ ] A revocation submission is unaffected
+  - [ ] A request at a `policy` URL under the chain is refused at every level,
+        for every method
+  - [ ] Every other request under the chain is refused, a route decision 0008
+        does not name included. That covers a query, the `changes` feed, the
+        quota reports, the replicas routes, Export and Import Space, and every
+        unsafe method at a container, Create Collection among them.
   - [ ] A caveat on any link of the chain binds the invocation. When two links
         carry it, both must hold.
-  - [ ] `GET`, `POST` and a `PUT` that creates a Resource are unaffected, and so
-        are a root invocation and a chain with no caveat
+  - [ ] A `POST` or a `PUT` that creates a Resource is unaffected, and so are a
+        root invocation and a chain with no caveat
   - [ ] A Resource with no `createdBy` is refused to a chain carrying the caveat
   - [ ] A second app the same user delegated to, and a later visit of the same
-        app under a new key, can edit and delete what the first created
+        app under a new key, can read, edit and delete what the first created
   - [ ] Another guest holding the same kind of grant cannot, and a guest cannot
-        edit a Resource created by a party above the caveat's link
+        read or edit a Resource created by a party above the caveat's link
   - [ ] The service description lists the caveat types the server understands
+  - [ ] The authorization profile entry lists the profile version that defines
+        caveats, which is a new version of the profile (settled 2026-11-20)
 
 The use case is a shared Collection, such as comments. A guest may add to it and
 may edit or delete only what that guest added. Today a `PUT` grant on the
@@ -1476,6 +1458,10 @@ A caveat restricts the capability that carries it. It keeps the action
 vocabulary equal to the HTTP verbs, and it leaves access-control policies as a
 mechanism that only broadens access. A moderator holds a grant without the
 caveat.
+
+The caveat covers reads too (settled 2026-11-20). A guest who reads every
+comment holds a second grant that allows `GET` and carries no caveat, or the
+Collection has a public-read policy.
 
 The caveat's principal is the controller of the capability that carries it.
 Every capability delegated beneath that one acts as the same principal, which is
@@ -1591,16 +1577,16 @@ doc; the other items are its sub-items in dependency order.
     (stamped policies), WASS-53 (replicated `did:webvh` resolution); all open as
     of 2026-10-05
   - storage-core: `ChangeDocument`, the Resource and Metadata models (stamp
-    members), `CollectionMetadata.revisions`. Shipped in 0.32.0 through 0.35.0;
-    the publishes are pending and the server consumes them by `link:`
+    members), `CollectionMetadata.revisions`. Shipped in 0.32.0 through 0.35.0,
+    published; the server consumes the registry release
   - web-spaces-server: every item in `blocked-by`; ARCHITECTURE.md's validator,
     hard-delete, resolver, and container-rule sections. Shipped: WSS-171 to
     WSS-177, WSS-182, WSS-183 archived by 2026-10-04, and ARCHITECTURE.md
     records the stamp and validator rules, Collection tombstones, the resolver
     clause and the `src/sync/` facet
   - pws-client: `Collection.changes()` document type; the `replicas` member on
-    the Space Metadata object. Filed: WCL-122 (change document, 0.89.0 pending
-    publish), WCL-123 (stamped policies), WCL-127 (`replicas` member)
+    the Space Metadata object. Filed: WCL-122 (change document, 0.89.0,
+    published), WCL-123 (stamped policies), WCL-127 (`replicas` member)
   - was-sync: the apply comparison (stamp order replaces the `writerId` echo
     check as the deciding rule; `writerId` stays a fast path). Filed: WS-23
     (stamp comparison), WS-24 (docs for the widened feed)
@@ -1849,12 +1835,14 @@ two-server test runs on the filesystem backend only.
         stalls as `unsupported-backend`
   - [ ] Test: a two-server pull of a Collection on a non-default backend
 
-Context: the pull loop stalls every Collection whose `backend` is not the
-default one, with reason `unsupported-backend`. The apply methods exist on the
-two primary backends only, and the loop always applies into the primary store. A
-data-plane adapter would need `applyResource` and `applyResourceMetadata`, and
-the loop would need to resolve the Collection's data backend as the request
-layer does (`fetchCollectionAndBackend`).
+Context: the pull loop applies a Collection's Resources to the server backend
+its `backend.id` selects (`default`, `fs` or `postgres`). A Collection whose
+`backend.id` selects no server backend of this deployment stalls with reason
+`unsupported-backend`, and that includes a backend registered on the source
+server. The apply methods exist on the two server backends only. A data-plane
+adapter for a registered external backend would need `applyResource` and
+`applyResourceMetadata`, and the loop would need to resolve that adapter for the
+Collection as the request layer does (`fetchCollectionAndBackend`).
 
 ---
 

@@ -8,7 +8,7 @@
  * A build with no git checkout (the Docker image) takes the commit from the
  * `GIT_COMMIT` environment variable instead.
  */
-import { execSync } from 'node:child_process'
+import { execSync, type StdioOptions } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -28,7 +28,7 @@ function gitCommit(): string | null {
     return fromEnv
   }
   // stderr is discarded so a missing git or checkout prints nothing.
-  const stdio = ['ignore', 'pipe', 'ignore'] as const
+  const stdio: StdioOptions = ['ignore', 'pipe', 'ignore']
   try {
     const commit = execSync('git rev-parse HEAD', { cwd: rootDir, stdio })
       .toString()

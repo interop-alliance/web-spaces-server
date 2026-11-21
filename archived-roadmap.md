@@ -7700,3 +7700,61 @@ validated. No test sends either body.
 
 Implemented 2026-11-13 in `resolveMetadataCustom`, which both levels share. The
 omitted case at the Collection level already cleared, and a test covered it.
+
+### WSS-264: [M] (*) [blocks 1] `createdBy` records the delegation chain a record was created under
+
+- status: done
+- done: 2026-11-20
+- priority: medium
+- backend: *
+- labels: provenance, zcap, wire-contract, spec
+- discovered-from: GitHub issue 40 and its design discussion (2026-11-15)
+- touches:
+  - web-spaces-server (this repo): `src/auth-header-hooks.ts` (`createdByOf`),
+    the create paths of `SpacesRepositoryRequest`, `SpaceRequest` and
+    `collectionContext.ts`, both backends, `src/lib/exportProvenance.ts` and
+    `src/lib/importProvenance.ts`, the `created-by` feature note in
+    `src/serviceDescription.ts`
+  - `@interop/storage-core`: the `createdBy` type on the Space, Collection and
+    Resource shapes (shipped in 0.46.1, typed as a list of DIDs)
+  - unaffected: `@interop/space-archive` (no entry or schema types `createdBy`)
+  - portable-web-spaces-spec: the `createdBy` member and the `created-by`
+    feature (filed as
+    <https://github.com/w3c-ccg/portable-web-spaces-spec/issues/98>, tracked
+    here as WSS-277)
+  - pws-client and the wallet repos: code that compares `createdBy` with one DID
+    (filed as pws-client WCL-169, freewallet FW-706 and wallet-core WC-316)
+  - pws-conformance-suite: cases that read `createdBy` (filed as PWSCS-38)
+- acceptance:
+  - [x] Wire decisions recorded in `decisions/` and approved. Settled
+        (2026-11-15) is the order of a delegated create's list, which runs from
+        the root end to the invoker. Settled (2026-11-17) are an array of DIDs
+        in every case, the Space controller left out of a delegated create's
+        list, and a root invocation listing the invoker alone. Recorded as
+        decision 0007.
+  - [x] A Resource, Collection or Space created under a delegated chain serves
+        that list as `createdBy`, on both backends
+  - [x] The list is recorded on create only and kept on every later write, as
+        the single DID is today
+  - [x] A create the provisioning policy granted records no `createdBy`
+  - [x] The export provenance statement carries the list, and import strips it
+        from an object that is not `verified`
+  - [x] The export archive and the replicated apply path carry the list wherever
+        they carry `createdBy` today
+  - [x] The `created-by` documentation describes the list. The spec text half
+        moved to WSS-277 (the spec text describes `createdBy` as the list).
+
+`createdBy` holds the DID of the invoker today. Most writes come from an app a
+user delegated to, often under a fresh key per visit, so the member names a key
+that means little to a reader and cannot be matched on a later visit. The chain
+names the user as well as the app.
+
+The list is what the `OwnResourcesOnly` caveat tests (WSS-265). It stays
+provenance on its own terms. Nothing is granted to a DID for appearing in it.
+
+Using DIDs, not capability ids, is deliberate. A grant that is revoked and
+issued again still matches what was created under the earlier one. The zcap
+library limits chain length, which bounds the size of the list.
+
+On a public-read Collection the list shows the delegation structure to any
+reader. A reader cannot tell which entry is the author from the list alone.
