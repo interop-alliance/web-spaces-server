@@ -1326,8 +1326,8 @@ remove it.
   - [ ] A chain whose root and links are DID URLs verifies against an https
         request when the root dereferences to the Space the request addresses,
         and the root's controller is that Space's controller
-  - [ ] A DID whose `PathHandler` lands in another Space, on another host, or
-        under a path above the Space URL is refused as the masked `not-found`
+  - [ ] A DID URL that dereferences to another Space, to another host, or to a
+        path above the Space URL is refused as the masked `not-found`
   - [ ] The `PathHandler` entry is read from the current document on every
         verification; no `versionId` pin is required, and a change of
         `serviceEndpoint` moves what every grant under the DID addresses
