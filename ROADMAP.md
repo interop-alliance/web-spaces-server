@@ -1295,7 +1295,7 @@ remove it.
 
 ### WSS-245: [M] (*) DID-relative invocation targets dereferenced through `PathHandler` services
 
-- status: todo
+- status: in-progress
 - priority: medium
 - backend: *
 - labels: zcap, webvh, portability, spec
@@ -1318,7 +1318,7 @@ remove it.
     `invocationTarget` and as the root capability's target
   - pws-conformance-suite: cases for the DID-relative chain
 - acceptance:
-  - [ ] Wire decisions recorded in `decisions/` and approved: the root
+  - [x] Wire decisions recorded in `decisions/` and approved: the root
         capability form `urn:zcap:root:<DID URL>`, whose target dereferences to
         a Space URL on this server; a DID URL admitted as the `invocationTarget`
         of every link beneath it; which `did:webvh` shapes a target may name

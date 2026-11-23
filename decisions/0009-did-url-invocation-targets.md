@@ -1,6 +1,6 @@
 # 0009: DID URL invocation targets
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-22
 - Driving work: letting a Space move to another provider and domain with its
   capabilities still working. The design was settled with the maintainer on

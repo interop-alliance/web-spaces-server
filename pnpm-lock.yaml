@@ -42,8 +42,8 @@ importers:
         specifier: ^8.2.2
         version: 8.2.2
       '@interop/ezcap':
-        specifier: ^7.6.0
-        version: 7.6.0
+        specifier: ^7.7.0
+        version: 7.7.0
       '@interop/http-digest-header':
         specifier: ^3.2.0
         version: 3.2.0
@@ -54,8 +54,8 @@ importers:
         specifier: ^6.3.0
         version: 6.3.0
       '@interop/http-signature-zcap-verify':
-        specifier: ^13.0.0
-        version: 13.0.0
+        specifier: ^13.2.0
+        version: 13.2.0
       '@interop/jsonld-signatures':
         specifier: ^11.9.0
         version: 11.9.0
@@ -78,8 +78,8 @@ importers:
         specifier: ^5.4.3
         version: 5.4.3
       '@interop/zcap':
-        specifier: ^12.0.0
-        version: 12.0.0
+        specifier: ^12.2.0
+        version: 12.2.0
       '@scure/base':
         specifier: ^2.4.0
         version: 2.4.0
@@ -657,8 +657,8 @@ packages:
       react-native-get-random-values:
         optional: true
 
-  '@interop/ezcap@7.6.0':
-    resolution: {integrity: sha512-RBs2NaK5tKanM/Cqs8PT5kXkf/6b0iSp+aJcFE0o8TrBU0sk+V5NViIRT36NN8fOclLMzOB7myCQeT5xeYAn5A==}
+  '@interop/ezcap@7.7.0':
+    resolution: {integrity: sha512-5vFT3o7qfqRMzIfumUmSwKq/lTnEz+KVjCiBx6jvL0SEXOhXyVD28dd+TAYcK1Dp2II2OBr4+RYxixoA9IK0Cg==}
     engines: {node: '>=20.0'}
 
   '@interop/http-client@1.0.6':
@@ -682,8 +682,8 @@ packages:
     resolution: {integrity: sha512-cIUdjyfz0EPXAk9b37XVwqDg1yGocTHEVZg/pfq5cm7ZhAmMQkcj1A1uea8x+Y1VHCJ0GmtTQYqf6Nx2gMplEg==}
     engines: {node: '>=20'}
 
-  '@interop/http-signature-zcap-verify@13.0.0':
-    resolution: {integrity: sha512-oE+fFOrEBK+4kvLtj5pqlkhzkfKRqFuuzV3yb28qu4gTnsxxw+mNH38SrJUBtemoG04A0fvIgQH3UpCdBuvcvw==}
+  '@interop/http-signature-zcap-verify@13.2.0':
+    resolution: {integrity: sha512-+/7yeDv+w9isZSMZguR9vx5lAUkr0UrAX3Q2oOyn+/BtRmCrJsFAM4OVmN9tRklRbE78pKZoZGTPPQZyzalpVg==}
     engines: {node: '>=24.0'}
 
   '@interop/jsonld-signatures@11.9.0':
@@ -793,8 +793,8 @@ packages:
     resolution: {integrity: sha512-Hhv0hV2xAlY8BWO5IxADi6w3L9qOdcM37R6ATMoicH1K7JO5vDjd96BwZ4SIkx+JSt6EWJjbO5Aejk4SMzJq/w==}
     engines: {node: '>=24.0'}
 
-  '@interop/zcap@12.0.0':
-    resolution: {integrity: sha512-by5d+WfZI8iuqbI/keZlTz1w9wXtgMv/PXSqDx/Jr5AZujUmniaNSKj+BFktMTvEjyZHnvq7SGbCuA5D3Rud9A==}
+  '@interop/zcap@12.2.0':
+    resolution: {integrity: sha512-LmV5vr3edZC0AqGIq6/wM+SsjcIrMTTLGi/fLrW3EW9eKFMuVpqijb1I4068XmMLPLjr6oIPwhBB4kiCLSY7Ig==}
     engines: {node: '>=24.0'}
 
   '@isaacs/nonrecursive-glob-match@1.1.0':
@@ -3414,7 +3414,7 @@ snapshots:
       '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
       '@interop/ed25519-verification-key': 8.2.2
       '@interop/edv-client': 17.9.5
-      '@interop/ezcap': 7.6.0
+      '@interop/ezcap': 7.7.0
       '@interop/minimal-cipher': 7.11.1
       '@interop/pws-client': 0.105.0(@interop/jsonld-signatures@11.9.0)
       '@interop/security-document-loader': 10.1.6
@@ -3514,7 +3514,7 @@ snapshots:
     transitivePeerDependencies:
       - expo-crypto
 
-  '@interop/ezcap@7.6.0':
+  '@interop/ezcap@7.7.0':
     dependencies:
       '@interop/data-integrity-core': 8.12.0
       '@interop/data-integrity-proof': 3.4.8
@@ -3522,7 +3522,7 @@ snapshots:
       '@interop/http-client': 1.0.6
       '@interop/http-signature-zcap-invoke': 6.3.0
       '@interop/jsonld-signatures': 11.9.0
-      '@interop/zcap': 12.0.0
+      '@interop/zcap': 12.2.0
     transitivePeerDependencies:
       - expo-crypto
 
@@ -3546,11 +3546,11 @@ snapshots:
     transitivePeerDependencies:
       - expo-crypto
 
-  '@interop/http-signature-zcap-verify@13.0.0':
+  '@interop/http-signature-zcap-verify@13.2.0':
     dependencies:
       '@interop/data-integrity-core': 8.12.0
       '@interop/http-signature-header': 5.0.3
-      '@interop/zcap': 12.0.0
+      '@interop/zcap': 12.2.0
       '@scure/base': 2.4.0
       pako: 2.2.0
 
@@ -3590,7 +3590,7 @@ snapshots:
       '@interop/data-integrity-core': 8.12.0
       '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
       '@interop/edv-client': 17.9.5
-      '@interop/ezcap': 7.6.0
+      '@interop/ezcap': 7.7.0
       '@interop/http-client': 1.0.6
       '@interop/minimal-cipher': 7.11.1
       '@interop/storage-core': 0.44.0
@@ -3611,13 +3611,13 @@ snapshots:
       '@interop/data-integrity-core': 8.12.0
       '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
       '@interop/edv-client': 17.9.5
-      '@interop/ezcap': 7.6.0
+      '@interop/ezcap': 7.7.0
       '@interop/http-client': 1.0.6
       '@interop/minimal-cipher': 7.11.1
       '@interop/storage-core': 0.46.1
       '@interop/vh-resource-log': 0.11.0(@interop/data-integrity-core@8.12.0)(@interop/storage-core@0.46.1)
       '@interop/x25519-key-agreement-key': 5.4.3
-      '@interop/zcap': 12.0.0
+      '@interop/zcap': 12.2.0
       '@noble/hashes': 2.4.0
       '@scure/base': 2.4.0
       json-canonicalize: 3.0.0
@@ -3632,7 +3632,7 @@ snapshots:
       '@interop/data-integrity-core': 8.12.0
       '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
       '@interop/ed25519-verification-key': 8.2.2
-      '@interop/ezcap': 7.6.0
+      '@interop/ezcap': 7.7.0
       '@interop/http-digest-header': 3.2.0
       '@interop/http-signature-zcap-invoke': 6.3.0
       '@interop/pws-client': 0.111.0(@interop/jsonld-signatures@11.9.0)
@@ -3766,7 +3766,7 @@ snapshots:
       '@interop/did-method-webvh': 5.20.0(@interop/data-integrity-core@8.12.0)
       '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
       '@interop/ed25519-verification-key': 8.2.2
-      '@interop/ezcap': 7.6.0
+      '@interop/ezcap': 7.7.0
       '@interop/pws-client': 0.105.0(@interop/jsonld-signatures@11.9.0)
       '@interop/social-core': 0.8.1
       '@interop/vh-resource-log': 0.11.0(@interop/data-integrity-core@8.12.0)(@interop/storage-core@0.46.1)
@@ -3803,7 +3803,7 @@ snapshots:
       '@interop/data-integrity-core': 8.12.0
       '@interop/ed25519-signature': 7.2.5(@interop/jsonld-signatures@11.9.0)
       '@interop/edv-client': 17.9.5
-      '@interop/ezcap': 7.6.0
+      '@interop/ezcap': 7.7.0
       '@interop/http-client': 1.0.6
       '@interop/minimal-cipher': 7.11.1
       '@interop/storage-core': 0.43.0
@@ -3842,7 +3842,7 @@ snapshots:
       '@interop/data-integrity-core': 8.12.0
       '@interop/jsonld-signatures': 11.9.0
 
-  '@interop/zcap@12.0.0':
+  '@interop/zcap@12.2.0':
     dependencies:
       '@digitalbazaar/zcap-context': 2.0.1
       '@interop/data-integrity-core': 8.12.0
