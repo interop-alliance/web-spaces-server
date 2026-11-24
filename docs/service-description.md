@@ -67,6 +67,14 @@ the advertisement too. `zcapCryptosuites` lists Data Integrity cryptosuite names
 only, so it names `eddsa-jcs-2022` alone. The legacy `Ed25519Signature2020`
 proof type is still accepted but not advertised.
 
+The entry also carries `features: ['did-url-targets']`. The token is this
+server's claim that a capability's `invocationTarget` may be a `did:webvh` DID
+URL, which the server dereferences through the DID document's `PathHandler`
+services. A client reads the token before it issues a DID URL grant. A server
+without the token answers such a grant with the masked `not-found`, which says
+nothing about why. The rules of these grants are in
+[webvh-controllers.md](webvh-controllers.md#did-url-invocation-targets).
+
 ## The encrypted-collections entry
 
 The third entry, under `https://w3id.org/pws/encrypted-collections`, is the

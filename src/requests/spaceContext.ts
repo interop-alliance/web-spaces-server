@@ -222,7 +222,8 @@ export async function fetchSpaceAndAuthorize({
     spaceController: context.spaceMetadata.controller,
     requestName,
     allowTargetQuery,
-    attenuatedRootTarget: context.spaceRootTarget
+    attenuatedRootTarget: context.spaceRootTarget,
+    admitDidUrlRoot: true
   })
   return { ...context, grantedBy }
 }
@@ -286,6 +287,7 @@ export async function fetchSpaceAndVerify({
     spaceController: context.spaceMetadata.controller,
     requestName,
     attenuatedRootTarget: context.spaceRootTarget,
+    admitDidUrlRoot: true,
     allowTargetQuery,
     revocation: { storage: request.server.storage, scope: { spaceId } },
     containerRule

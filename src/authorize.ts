@@ -39,6 +39,8 @@ import type { IDID } from './types.js'
  * @param [options.attenuatedRootTarget] {string}   ancestor target (the Space
  *   URL) whose root capability is also accepted as the root of a delegated
  *   chain attenuating down to the request URL (see `verifyZcap`)
+ * @param [options.admitDidUrlRoot] {boolean}   admit a chain rooted in a DID
+ *   URL under the Space `attenuatedRootTarget` names (see `handleZcapVerify`)
  * @returns {Promise<'capability' | 'policy'>}   resolves when authorized,
  *   naming what granted the request: a verified capability invocation, or
  *   the access-control policy fallback; throws otherwise
@@ -52,7 +54,8 @@ export async function authorize({
   spaceController,
   requestName = '',
   allowTargetQuery = false,
-  attenuatedRootTarget
+  attenuatedRootTarget,
+  admitDidUrlRoot = false
 }: {
   request: FastifyRequest
   allowedTarget: string
@@ -63,6 +66,7 @@ export async function authorize({
   requestName?: string
   allowTargetQuery?: boolean
   attenuatedRootTarget?: string
+  admitDidUrlRoot?: boolean
 }): Promise<'capability' | 'policy'> {
   const { method } = request
   const { storage } = request.server
@@ -85,6 +89,7 @@ export async function authorize({
         requestName,
         allowTargetQuery,
         attenuatedRootTarget,
+        admitDidUrlRoot,
         revocation: { storage, scope: { spaceId } }
       })
       return 'capability'

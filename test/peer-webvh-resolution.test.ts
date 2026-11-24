@@ -54,7 +54,8 @@ import {
   rootZcap,
   startTestServer,
   webvhLogSigner,
-  zcapClients
+  zcapClients,
+  sleep
 } from './helpers.js'
 
 vi.mock('../src/config.default.js', async importOriginal => ({
@@ -79,15 +80,6 @@ interface Peer {
   log: DIDLog
   logSigner: Signer
   keyPair: Ed25519VerificationKey
-}
-
-/**
- * Sleeps for `ms` milliseconds.
- * @param ms {number}
- * @returns {Promise<void>}
- */
-async function sleep(ms: number): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms))
 }
 
 /**

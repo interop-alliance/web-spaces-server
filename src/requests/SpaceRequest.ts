@@ -643,6 +643,7 @@ export class SpaceRequest {
       rootInvocation,
       invoker,
       invokedCapability,
+      dereferencedTarget,
       spaceMetadata,
       spaceRootTarget
     } = await fetchSpaceAndVerify({
@@ -686,7 +687,12 @@ export class SpaceRequest {
             serverBackends: request.server.serverBackends,
             serverUrl: request.server.serverUrl
           },
-          invocation: { rootInvocation, invoker, invokedCapability }
+          invocation: {
+            rootInvocation,
+            invoker,
+            invokedCapability,
+            dereferencedTarget
+          }
         },
         storage,
         logger: request.log
@@ -988,6 +994,10 @@ async function authorizeAndWriteSpaceMetadata({
       allowedAction: 'PUT',
       spaceController: existingSpaceMetadata.controller,
       attenuatedRootTarget: spaceUrl,
+      // An existing Space accepts a DID URL root that dereferences to it,
+      // under the document as it stands now. The root's controller is the
+      // stored controller, whatever the body proposes.
+      admitDidUrlRoot: true,
       revocation: { storage, scope: { spaceId } },
       // The container rule: Update Space Metadata on an existing Space is
       // controller-only. A delegated capability is refused whatever its

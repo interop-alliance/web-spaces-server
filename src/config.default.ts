@@ -131,6 +131,13 @@ export const WEBVH_DOCUMENT_CACHE_TTL = 5_000 // milliseconds
 export const WEBVH_DOCUMENT_REVERIFY_AGE = 60_000 // milliseconds
 /** Max number of resolved did:webvh documents held per backend cache. */
 export const WEBVH_DOCUMENT_CACHE_MAX = 1_000
+/**
+ * Max combined size, in bytes, of the history logs a backend's did:webvh
+ * document cache holds at once (lru-cache `maxSize`). Each entry keeps its
+ * verified log, measured by the byte length of the stored log Resource. A log
+ * larger than this is resolved but not cached.
+ */
+export const WEBVH_DOCUMENT_CACHE_MAX_BYTES = 64 * 1024 * 1024 // 64 MiB
 
 /**
  * The index of every stored replica registration, which maps a replicated

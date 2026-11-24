@@ -105,7 +105,8 @@ documents, not in commit messages, PR descriptions, or CHANGELOG.md entries.
 the full host and port. The server's `SERVER_URL` and the URL a client targets
 must be exactly identical strings (`localhost` vs `127.0.0.1`, or a different
 port, makes delegated-access requests 404). This is how URL-based capabilities
-work, not a bug.
+work, not a bug. A `did:webvh` DID URL target is the exception, since the server
+dereferences it to the https URL.
 
 The test helpers (`startTestServer`, `openTempBackend`, `faults`) are documented
 in [docs/consuming-server-as-library.md](docs/consuming-server-as-library.md)

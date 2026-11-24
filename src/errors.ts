@@ -999,13 +999,16 @@ class DenialError extends ProblemError {
  * `detail`.
  * @param options {object}
  * @param [options.requestName] {string}   request name used in the error title
+ * @param [options.cause] {Error}   the refusal's underlying reason, kept off
+ *   the wire
  */
 export class UnauthorizedError extends DenialError {
-  constructor({ requestName }: { requestName?: string }) {
+  constructor({ requestName, cause }: { requestName?: string; cause?: Error }) {
     super({
       type: ProblemTypes.NOT_FOUND,
       detail: MASKED_NOT_FOUND_DETAIL,
-      requestName
+      requestName,
+      cause
     })
   }
 }

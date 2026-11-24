@@ -125,6 +125,20 @@ export const ENCRYPTED_COLLECTIONS_FEATURES = [
 ] as const
 
 /**
+ * The optional affordances of the zCap authorization profile this server
+ * serves, as the `features` tokens of that profile's version entry. A client
+ * reads them before it issues a grant that relies on one.
+ *
+ * - `did-url-targets`: a capability's `invocationTarget` may be a `did:webvh`
+ *   DID URL, which the server dereferences through the DID document's
+ *   `PathHandler` services. The root capability is
+ *   `urn:zcap:root:<url-encoded DID URL>`, and its DID URL must dereference to
+ *   the canonical URL of the Space the request addresses; the whole chain is
+ *   in DID URL form.
+ */
+const AUTHZ_PROFILE_FEATURES = ['did-url-targets'] as const
+
+/**
  * Throws unless every `required` token is in the `served` list of the entry
  * `identifier` names. `required` is typed from `served`, so a token the
  * server does not serve is a type error first and a refusal to start second.
@@ -234,7 +248,8 @@ function buildServiceDescription({
           version: AUTHZ_PROFILE_VERSION,
           url: AUTHZ_PROFILE_URL,
           signatureAlgorithms: INVOCATION_SIGNATURE_ALGORITHMS,
-          zcapCryptosuites: delegationProofCryptosuites()
+          zcapCryptosuites: delegationProofCryptosuites(),
+          features: [...AUTHZ_PROFILE_FEATURES]
         } satisfies AuthzProfileVersionEntry
       ],
       [ENCRYPTED_COLLECTIONS_IDENTIFIER]: [

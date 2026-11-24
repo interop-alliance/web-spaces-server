@@ -1,5 +1,33 @@
 # History
 
+## 0.47.0 - TBD
+
+### Added
+
+- A capability's `invocationTarget` may be a `did:webvh` DID URL. The root
+  capability is `urn:zcap:root:<url-encoded DID URL>` and must dereference,
+  through the DID document's `PathHandler` services, to the canonical URL of the
+  Space the request addresses. Every link beneath it is in DID URL form and
+  dereferences at or beneath its parent's URL. A Space can move to another
+  provider with its grants intact by repointing the `PathHandler`.
+- A DID URL selector such as `versionId` chooses the DID document version that
+  maps the path. Only the link directly beneath the root may introduce one.
+- The DID may be self-hosted, replicated here, or not hosted here. The log of
+  a DID not hosted here that a target names is fetched only after the request
+  signature verifies, under the existing `PEER_WEBVH_*` bounds and
+  `WAS_WEBVH_BLOCKLIST`.
+- A chain rooted in a DID URL is revocable in a Space, and Import Space installs
+  its archived revocations. Every route of an existing Space admits a DID URL
+  root, Update Space included. Create Space and `/kms` take an https root.
+- The zCap authorization profile entry of `GET /service` carries
+  `features: ['did-url-targets']`.
+
+### Fixed
+
+- A refusal names `capability-expired` only when every delegation proof in the
+  chain verified. A chain with an expired link and a forged later link is now
+  the plain `not-found`. Requires `@interop/zcap` 12.3.1.
+
 ## 0.46.2 - 2026-11-21
 
 ### Fixed

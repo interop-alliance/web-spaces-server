@@ -77,9 +77,15 @@ import {
   readLogFromString,
   resolveDID
 } from '@interop/did-method-webvh'
-import type { DIDDoc, DIDLog } from '@interop/did-method-webvh'
+import type {
+  DIDDoc,
+  DIDLog,
+  ResolutionOptions,
+  VersionSelectorParameter
+} from '@interop/did-method-webvh'
 import {
   WEBVH_DOCUMENT_CACHE_MAX,
+  WEBVH_DOCUMENT_CACHE_MAX_BYTES,
   WEBVH_DOCUMENT_CACHE_TTL,
   WEBVH_DOCUMENT_REVERIFY_AGE
 } from '../config.default.js'
@@ -129,8 +135,17 @@ export interface WebvhResolverContext {
 }
 
 /**
- * A cached, verified controller document plus the bookkeeping revalidation
- * needs: `etag` is the log Resource's content `ETag` as of the read that
+ * The version-selecting DID parameters of a DID URL (`versionId`,
+ * `versionNumber`, `versionTime`), as `parseDidUrl` yields them and
+ * `resolveDID` takes them.
+ */
+export type TargetSelectors = Pick<ResolutionOptions, VersionSelectorParameter>
+
+/**
+ * A cached, verified controller document, the log it was verified from, and
+ * the bookkeeping revalidation needs. `log` is kept so a version selector can
+ * be resolved from the same verified log (see {@link resolveStoredWebvhLog}).
+ * `etag` is the log Resource's content `ETag` as of the read that
  * produced `doc` (`undefined` for a log with no validator, in which case the
  * entry is never cheaply revalidated -- see {@link reviseEntry}); `verifiedAt` is the `performance.now()` at which the
  * log was last fully verified. It is a monotonic-clock reading rather than a
@@ -141,6 +156,10 @@ export interface WebvhResolverContext {
  */
 interface WebvhCacheEntry {
   doc: DIDDoc
+  log: DIDLog
+  // The byte length of the stored log Resource `log` was parsed from, which
+  // the cache's size budget counts.
+  logBytes: number
   etag: string | undefined
   verifiedAt: number
 }
@@ -195,6 +214,8 @@ const documentCaches = backendScoped(() => {
     Omit<WebvhFetchContext, 'backend'> & { serverBackends: ServerBackends }
   >({
     max: WEBVH_DOCUMENT_CACHE_MAX,
+    maxSize: WEBVH_DOCUMENT_CACHE_MAX_BYTES,
+    sizeCalculation: entry => entry.logBytes || 1,
     ignoreFetchAbort: true,
     fetchMethod: async (key, staleEntry, { context }) => {
       inFlight.set(key, (inFlight.get(key) ?? 0) + 1)
@@ -554,22 +575,59 @@ export async function resolveWebvhController({
   if (grant !== undefined && 'document' in grant) {
     return grant.document
   }
+  const stored = await resolveStoredWebvhLog({
+    storage,
+    serverBackends,
+    serverUrl,
+    did
+  })
+  if (stored !== undefined) {
+    return stored.doc
+  }
+  if (grant !== undefined) {
+    return keyId === undefined
+      ? await grant.resolver.resolve({ did, serverUrl })
+      : await grant.resolver.resolveKey({ did, keyId, serverUrl })
+  }
+  throw new Error(
+    `"${did}" is not a did:webvh DID whose history log this server ` +
+      'stores; only self-hosted and replicated did:webvh controllers are ' +
+      'resolvable here.'
+  )
+}
+
+/**
+ * The local half of {@link resolveWebvhController}: the current document of a
+ * `did:webvh` whose history log this server stores, self-hosted or a
+ * replicated copy, together with the verified log it was resolved from. Both
+ * come from the same cache entry, so a caller that resolves a version
+ * selector from `log` reads the version history `doc` was verified with.
+ * Resolves `undefined` when this server stores no log for the DID, and
+ * rejects with a plain `Error` on every other failure
+ * {@link resolveWebvhController} names.
+ *
+ * @param options {object}
+ * @param options.storage {StorageBackend}   the control plane
+ * @param options.serverBackends {ServerBackends}   the set it belongs to
+ * @param options.serverUrl {string}   this server's base URL
+ * @param options.did {string}   the DID to resolve
+ * @returns {Promise<{ doc: DIDDoc, log: DIDLog } | undefined>}
+ */
+export async function resolveStoredWebvhLog({
+  storage,
+  serverBackends,
+  serverUrl,
+  did
+}: Omit<WebvhResolverContext, 'peer'> & { did: string }): Promise<
+  { doc: DIDDoc; log: DIDLog } | undefined
+> {
   // A self-hosted DID is located without an await, so its cache fetch starts
   // in this tick (see `documentCaches` on an invalidation racing a fetch).
   const location =
     selfHostedLogLocation({ serverUrl, did }) ??
     (await locateWebvhLog({ storage, serverUrl, did }))
   if (location === undefined) {
-    if (grant !== undefined) {
-      return keyId === undefined
-        ? await grant.resolver.resolve({ did, serverUrl })
-        : await grant.resolver.resolveKey({ did, keyId, serverUrl })
-    }
-    throw new Error(
-      `"${did}" is not a did:webvh DID whose history log this server ` +
-        'stores; only self-hosted and replicated did:webvh controllers are ' +
-        'resolvable here.'
-    )
+    return undefined
   }
   const { spaceId, collectionId, selfHosted } = location
   const { cache } = documentCaches.for(storage)
@@ -589,7 +647,7 @@ export async function resolveWebvhController({
     // `fetchMethod` always resolves an entry or rejects; this is a type guard.
     throw new Error(`The history log for "${did}" could not be resolved.`)
   }
-  return entry.doc
+  return { doc: entry.doc, log: entry.log }
 }
 
 /**
@@ -642,22 +700,23 @@ async function reviseEntry({
 async function resolveVerifiedEntry(
   context: WebvhFetchContext
 ): Promise<WebvhCacheEntry> {
-  const { doc, etag } = await resolveVerifiedDocument(context)
-  return { doc, etag, verifiedAt: performance.now() }
+  const { doc, log, logBytes, etag } = await resolveVerifiedDocument(context)
+  return { doc, log, logBytes, etag, verifiedAt: performance.now() }
 }
 
 /**
  * The uncached half of {@link resolveWebvhController}: read the log, verify it,
  * and check the resolved document against what was asked for. Returns the
- * verified document together with the log Resource's content `ETag` as of the
- * read that was verified.
+ * verified document and log together with the log Resource's content `ETag`
+ * as of the read that was verified.
  *
  * The verification itself is {@link verifyWebvhLog}; a deactivated DID is
  * refused here, since it can no longer authorize anything. A log that
  * declares witnesses is refused, self-hosted or replicated.
  *
  * @param options {WebvhFetchContext}
- * @returns {Promise<{ doc: DIDDoc, etag: string | undefined }>}
+ * @returns {Promise<{ doc: DIDDoc, log: DIDLog, logBytes: number,
+ *   etag: string | undefined }>}
  */
 async function resolveVerifiedDocument({
   storage,
@@ -666,7 +725,12 @@ async function resolveVerifiedDocument({
   spaceId,
   collectionId,
   selfHosted
-}: WebvhFetchContext): Promise<{ doc: DIDDoc; etag: string | undefined }> {
+}: WebvhFetchContext): Promise<{
+  doc: DIDDoc
+  log: DIDLog
+  logBytes: number
+  etag: string | undefined
+}> {
   // Taken before the read, so a forget that lands while this resolve is
   // reading or verifying keeps it from recording a head below.
   const forgets = logHeadForgets({ storage })
@@ -679,7 +743,7 @@ async function resolveVerifiedDocument({
   }
   const { etag } = stored
   const logText = new TextDecoder().decode(stored.bytes)
-  const { doc } = await verifyStoredLog({
+  const { log, doc } = await verifyStoredLog({
     storage,
     did,
     spaceId,
@@ -688,7 +752,7 @@ async function resolveVerifiedDocument({
     logText,
     forgets
   })
-  return { doc, etag }
+  return { doc, log, logBytes: stored.bytes.byteLength, etag }
 }
 
 /**
@@ -851,19 +915,29 @@ export async function verifyPeerServedLog({
  * see one error channel. A deactivated DID still verifies; the caller decides
  * what that means.
  *
+ * `selectors` are the version-selecting DID parameters of a DID URL
+ * (`versionId`, `versionNumber`, `versionTime`), handed to `resolveDID` as
+ * they are. With none, the document is the log's current one. With one, it is
+ * the selected version's, while the whole log is still verified, and
+ * `deactivated` reports the log's final state.
+ *
  * @param options {object}
  * @param options.did {string}   the DID the log must resolve to
  * @param options.log {DIDLog}
+ * @param [options.selectors] {object}   the version to resolve
  * @returns {Promise<{ doc: DIDDoc, deactivated: boolean }>}
  */
 export async function verifyWebvhLog({
   did,
-  log
+  log,
+  selectors
 }: {
   did: string
   log: DIDLog
+  selectors?: TargetSelectors
 }): Promise<{ doc: DIDDoc; deactivated: boolean }> {
   const resolved = await resolveDID(did, {
+    ...selectors,
     verifier: defaultWebvhLogVerifier,
     resolveControlledDid: async () => log,
     witnessProofs: []

@@ -159,9 +159,11 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   wallet profile entry claims that the core and Encrypted Collections entries
   carry every token a wallet needs, `encryption` among them. The core entry
   carries `originId` and `serverDid`; the `instance` member carries
-  `exportSigningMethod`. The replication entry carries `url`. A root-level
-  `onSend` hook appends `Link: <.../service>; rel="service"` to every response.
-  See [docs/service-description.md](docs/service-description.md).
+  `exportSigningMethod`. The zCap authorization profile entry carries
+  `features: ['did-url-targets']`, the claim that a capability may name a DID
+  URL as its target. The replication entry carries `url`. A root-level `onSend`
+  hook appends `Link: <.../service>; rel="service"` to every response. See
+  [docs/service-description.md](docs/service-description.md).
 - **`src/lib/serverIdentity.ts`**, **`src/lib/provenanceStatement.ts`**,
   **`src/lib/exportProvenance.ts`**, **`src/lib/importProvenance.ts`** -- the
   server's own identity and export provenance. The server derives an
@@ -173,15 +175,18 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   object that is not `verified`. See
   [docs/server-identity-and-provenance.md](docs/server-identity-and-provenance.md)
   and [decision 0003](decisions/0003-one-server-key-for-export-and-sync.md).
-- **`src/lib/peerWebvh.ts`**, **`src/lib/webvhLogWrite.ts`**,
-  **`src/lib/webvhBlocklist.ts`** -- the `did:webvh` paths. A self-hosted
-  `did:webvh` resolves from a local storage read of its `did.jsonl`, verified
-  (SCID pinning, hash chain, no witnesses) under the current-key-set rule. The
-  log only grows: a fast-forward `PUT`, `DELETE` 405, a per-DID head record, and
-  verify-on-append. The one network fetch is a foreign `did:webvh` with no
-  stored log invoking a delegated capability, bounded by `PEER_WEBVH_*` and
-  `WAS_WEBVH_BLOCKLIST`. See
-  [docs/webvh-controllers.md](docs/webvh-controllers.md).
+- **`src/lib/peerWebvh.ts`**, **`src/lib/didUrlTarget.ts`**,
+  **`src/lib/webvhLogWrite.ts`**, **`src/lib/webvhBlocklist.ts`** -- the
+  `did:webvh` paths. A self-hosted `did:webvh` resolves from a local storage
+  read of its `did.jsonl`, verified (SCID pinning, hash chain, no witnesses)
+  under the current-key-set rule. The log only grows: a fast-forward `PUT`,
+  `DELETE` 405, a per-DID head record, and verify-on-append. Two network fetches
+  exist, each bounded by `PEER_WEBVH_*` and `WAS_WEBVH_BLOCKLIST`. One is a
+  foreign `did:webvh` with no stored log invoking a delegated capability. The
+  other is a DID not hosted here that a DID URL invocation target names.
+  `didUrlTarget.ts` dereferences such a target through the DID document's
+  `PathHandler` services and checks where each link of a DID URL chain may
+  reach. See [docs/webvh-controllers.md](docs/webvh-controllers.md).
 - **`src/sync/`**, **`src/lib/replicaApply.ts`**, **`src/lib/syncIdentity.ts`**,
   **`src/lib/webvhLogLocation.ts`** -- the replication facet. A replica
   registration (`POST /space/:spaceId/replicas`) is one source peer of a Space,
@@ -487,12 +492,17 @@ Containment: **SpacesRepository > Space > Collection > Resource**.
   controller's key rather than using sessions or bearer tokens. Avoid: session,
   bearer token, access token.
 - **`invocationTarget`** -- the full URL (including host and port) a capability
-  authorizes. Must exactly match the server's `serverUrl`-derived URL.
+  authorizes. Must exactly match the server's `serverUrl`-derived URL. The
+  exception is a `did:webvh` DID URL, which the server dereferences to such a
+  URL (see [DID URL targets](#zcap-structure)).
 - **Root capability** -- `urn:zcap:root:<url-encoded target>`, whose controller
   is the Space controller. Synthesized by the document loader in `zcap.ts`. For
   the PWS route family, `target` is the Space's canonical trailing-slash URL
   (`spaceRootTarget` in `requests/spaceContext.ts`), the same URL a delegated
-  chain attenuates from.
+  chain attenuates from. A DID URL root is the other form: `target` is a
+  `did:webvh` DID URL ending in `/`, with no selector or fragment, that
+  dereferences to exactly that Space URL. It is synthesized with the Space's
+  controller too.
 - **`did:key`** -- the default DID method here; keys are Ed25519
   (`Ed25519VerificationKey2020` / `Ed25519Signature2020`). Space creation, and
   the `/kms` keystore routes, accept nothing else.
@@ -552,6 +562,16 @@ The Space listing's `?include=deleted` lists tombstoned Collections only under a
 verified capability. `fetchSpaceAndAuthorize` reports what granted the read
 (`grantedBy`), and a listing served through the access-control policy fallback
 ignores the flag and lists live Collections only.
+
+**DID URL targets:** a capability may name a `did:webvh` DID URL as its
+`invocationTarget`, so a Space can move to another provider with its grants
+intact. The root is `urn:zcap:root:<url-encoded DID URL>` and must dereference
+to the canonical URL of the Space the request addresses. Every link beneath it
+is in DID URL form and dereferences at or beneath its parent's URL. A selector
+may be introduced only by the link directly beneath the root. A refusal is the
+masked `not-found`. The profile entry advertises the feature as
+`did-url-targets`. Full rules in
+[docs/webvh-controllers.md](docs/webvh-controllers.md).
 
 **The `did:webvh` resolver on every path:** each verification engages the local
 `did:webvh` resolver, whatever the scope's own controller is: route invocations,

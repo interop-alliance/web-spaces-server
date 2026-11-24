@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 278
+nextAvailableId: 280
 
 <!-- roadmap-order:index:start -->
 
@@ -83,8 +83,7 @@ Ready:
 - WSS-70 [M] (*) Keystore deletion (route, backend method, orphan GC)
 - WSS-73 [M] (*) Periodic sweep of Spaces and keystores whose did:webvh
   controller no longer resolves
-- WSS-245 [M] (*) DID-relative invocation targets dereferenced through
-  `PathHandler` services
+- WSS-278 [M] (*) A witnessed `did:webvh` as an invocation target
 - WSS-265 [M] (*) Capability caveats and the `OwnResourcesOnly` caveat
 
 Chains:
@@ -171,6 +170,8 @@ Waiting on another repo:
   domain move) (after CLI-22)
 - WSS-244 [L] (*) Rename the epoch-configuration state type in test fixtures
   (after WASS-84)
+- WSS-279 [L] (*) Import the service description spec identifiers from
+  storage-core (after SC-15)
 
 **Someday / Maybe**
 
@@ -1293,85 +1294,36 @@ are all deleted is unreachable to every client, since nothing can locate it and
 nothing can authorize against it, so the server is the only party that can
 remove it.
 
-### WSS-245: [M] (*) DID-relative invocation targets dereferenced through `PathHandler` services
+### WSS-278: [M] (*) A witnessed `did:webvh` as an invocation target
 
-- status: in-progress
+- status: todo
 - priority: medium
 - backend: *
-- labels: zcap, webvh, portability, spec
-- discovered-from: DID-relative URL verification question (2026-11-07)
+- labels: zcap, webvh, portability
+- discovered-from: WSS-245 (2026-11-22)
 - touches:
-  - web-spaces-server (this repo): `src/zcap.ts` (`rootCapabilityLoader`,
-    `expectedRoots`, `verifyZcap`, the peer pre-pass),
-    `src/lib/webvhController.ts` and `src/lib/peerWebvh.ts` (resolving a
-    `did:webvh` this server does not host), `src/lib/containerRule.ts` and
-    `src/lib/clientAnnexClause.ts` (they read chain-link targets),
-    docs/webvh-controllers.md, ARCHITECTURE.md's ZCap Structure
-  - `@interop/zcap`: an async target-dereference hook consulted where the
-    proof's `invocationTarget` is compared with the invoked capability's
-  - `@interop/http-signature-zcap-verify`: pass the hook through
-  - `@interop/did-method-webvh`: PR 20 (`dereference`, `parseDidUrl`,
-    `selectPathHandler`, `pathHandlerUrl`), merged and published
-  - pws-client: dereference a DID URL target to find where to send, accept a DID
-    URL as a grant `target`, derive handles from it
-  - portable-web-spaces-spec: the zCap authorization profile, a DID URL as an
-    `invocationTarget` and as the root capability's target
-  - pws-conformance-suite: cases for the DID-relative chain
+  - web-spaces-server (this repo): `src/lib/peerWebvh.ts`,
+    `src/lib/webvhController.ts`, `src/lib/didUrlTarget.ts`,
+    docs/webvh-controllers.md
+  - `@interop/did-method-webvh`: a bounded way to supply witness proofs to
+    resolution, if the current options do not cover it
 - acceptance:
-  - [x] Wire decisions recorded in `decisions/` and approved: the root
-        capability form `urn:zcap:root:<DID URL>`, whose target dereferences to
-        a Space URL on this server; a DID URL admitted as the `invocationTarget`
-        of every link beneath it; which `did:webvh` shapes a target may name
-        (self-hosted, replicated, not hosted here)
-  - [ ] A chain whose root and links are DID URLs verifies against an https
-        request when the root dereferences to the Space the request addresses,
-        and the root's controller is that Space's controller
-  - [ ] A DID URL that dereferences to another Space, to another host, or to a
-        path above the Space URL is refused as the masked `not-found`
-  - [ ] The `PathHandler` entry is read from the current document on every
-        verification; no `versionId` pin is required, and a change of
-        `serviceEndpoint` moves what every grant under the DID addresses
-  - [ ] A `did:webvh` this server does not host resolves under the
-        `PEER_WEBVH_*` bounds and `WAS_WEBVH_BLOCKLIST`, with a cache, and the
-        request signature is checked before any fetch
-  - [ ] The container rule and the client-annex clause decide on dereferenced
-        targets
-  - [ ] Tests: a promoted Space whose document carries a `PathHandler`; a Space
-        exported from one test server and imported on another, with a grant
-        issued before the move invoked after the `serviceEndpoint` is repointed
-  - [ ] docs/webvh-controllers.md and ARCHITECTURE.md describe the mapping and
-        the authority rule
+  - [ ] A decision on witness proofs for a target DID this server does not host:
+        fetch and verify `did-witness.json` under the `PEER_WEBVH_*` bounds, or
+        keep refusing
+  - [ ] If verified: the fetch has address, redirect, size and time bounds, the
+        witness threshold is checked, and a log whose proofs fall short is
+        refused as the masked `not-found`
+  - [ ] Tests: a witnessed portable DID used as a grant target, with the
+        threshold met and not met
+  - [ ] docs/webvh-controllers.md states what a witnessed target DID gets
 
-Context: a Space should move to another provider and domain with its zcaps still
-working. Today every `invocationTarget` and every root capability names the
-https URL of the provider, so a move invalidates them all. With the DID URL path
-handling of `did:webvh`, a grant names
-`did:webvh:<scid>:<host>/images/image.jpg`, and the document's `PathHandler`
-service maps the path to the current https URL. The document is the user's, so
-repointing the service is the move, and a version pin would defeat it.
-
-The whole chain lives in DID space. The root capability's target is the DID URL
-the Space is addressed under, and each delegated link attenuates it by the
-library's existing prefix rule, so the link-by-link check needs no change. The
-server synthesizes the root by dereferencing its target to an https URL,
-checking it is this server's and is the Space the request addresses, and giving
-the root that Space's controller. Authority stays with the Space controller; the
-DID's controller can only repoint the mapping. The one comparison that crosses
-schemes is the invocation point, where the https proof target meets the DID
-capability target; that needs an async hook in `@interop/zcap`, since the
-verifier's `url` also feeds the Cavage `(request-target)` and cannot be swapped
-for the DID URL. For `expectedTarget` the server maps the request URL back into
-DID form from the root's remainder.
-
-For portability the DID must be one the user keeps across providers, such as
-`did:webvh:<scid>:alice.example`, since the provider-hosted
-`did:webvh:<scid>:<host>:space:<S>:<C>` changes with the host and its old log
-stops being served. That DID is not hosted here, so the server resolves it over
-the network with the bounds the replication path already has; the local-only
-pre-pass cannot run first, since the root cannot be synthesized before the
-fetch. Whether such a DID may also be the Space controller is a separate
-decision. Related: the foreign `did:webvh` fetch bound (WSS-240) and the
-cross-host invoker research (WSS-162).
+Context: the server refuses any `did:webvh` log that declares witnesses. A DID
+URL invocation target names a DID the user keeps across providers, and such a
+DID is the likeliest to declare witnesses, since witnessing guards against a
+host rewriting history. Until this is decided, a witnessed DID cannot be used as
+a target, and its grants answer the masked `not-found`. Related: the same
+question for a replicated log (WSS-207).
 
 ---
 
@@ -2957,6 +2909,40 @@ optional half.
 Reported by the audit and not re-checked case by case. Confirm each duplicate
 covers no branch of its own before removing it. `test/perf-lib.test.ts` covers
 the benchmark script under `scripts/performance/`, not the server.
+
+### WSS-279: [L] (*) [after SC-15] Import the service description spec identifiers from storage-core
+
+- status: todo
+- priority: low
+- backend: *
+- labels: service-description, refactor, dependencies
+- discovered-from: WSS-245 (2026-11-23)
+- blocked-by: SC-15
+- touches:
+  - web-spaces-server (this repo): `src/config.default.ts` (the `*_IDENTIFIER`
+    constants), `src/serviceDescription.ts`, `package.json` (the storage-core
+    range)
+  - storage-core: SC-15 adds the constants and the `features` member. Published
+    as 0.47.0, which package.json and the lockfile resolve from the npm registry
+  - pws-client: WCL-107 makes the same move there
+- acceptance:
+  - [ ] `src/serviceDescription.ts` imports `PWS_SPEC_ID`,
+        `AUTHZ_PROFILE_SPEC_ID`, `ENCRYPTED_COLLECTIONS_SPEC_ID`,
+        `CLIENT_ANNEX_SPEC_ID`, `REPLICATION_SPEC_ID` and
+        `WALLET_PROFILE_SPEC_ID` from `@interop/storage-core` in place of its
+        `*_IDENTIFIER` constants
+  - [ ] The local `*_IDENTIFIER` constants are removed from
+        `src/config.default.ts`, and every other importer of them moves
+  - [ ] The `& { features: string[] }` addition on the authorization profile
+        entry's `satisfies` clause is removed, since `AuthzProfileVersionEntry`
+        carries `features`
+  - [ ] The service description output is byte-identical to before, and the
+        existing service description tests pass unchanged
+
+Context: the server defines the service description identifiers itself, and
+widens the authorization profile entry type locally to carry the
+`did-url-targets` token. storage-core now owns both, so the copies go. Filed
+with WSS-245 so the cleanup is not lost. It changes no wire output.
 
 ### WSS-275: [L] (fs) Cover the filesystem clock across a reopen and the open-time sweeps
 

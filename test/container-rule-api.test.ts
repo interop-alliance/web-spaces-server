@@ -47,6 +47,7 @@ import {
   client,
   delegate,
   openTempBackend,
+  pathHandler,
   requestError,
   rootZcap,
   provisionWebvhIdentity,
@@ -54,6 +55,8 @@ import {
   zcapClients
 } from './helpers.js'
 import type { WebvhIdentity } from './helpers.js'
+import { signedInject } from '../src/testing.js'
+import { rootCapabilityId } from '../src/zcap.js'
 
 /** The service-entry type IRI naming an account's current annex DID. */
 const DELEGATED_CLIENTS_SERVICE_TYPE = 'https://w3id.org/byoe#DelegatedClients'
@@ -1217,6 +1220,117 @@ describe('container rule (unsafe methods at a container URL)', () => {
         })
       )
       assert.equal(err.status, 404)
+    })
+  })
+  describe('a chain rooted in a DID URL decides on dereferenced targets', () => {
+    /**
+     * Provisions a fresh Space and a self-hosted `did:webvh` whose document
+     * maps `/` to that Space's URL, and returns the Space with the DID URL
+     * root id of the mapping.
+     *
+     * @returns {Promise<{ space: TestSpace, did: string, didRootId: string }>}
+     */
+    async function provisionMappedSpace(): Promise<{
+      space: TestSpace
+      did: string
+      didRootId: string
+    }> {
+      const space = await provisionSpace()
+      const { did } = await provisionWebvhIdentity({
+        owner: alice,
+        baseServerUrl,
+        services: [
+          pathHandler({
+            id: '#space',
+            path: '/',
+            serviceEndpoint: space.spaceUrl
+          })
+        ]
+      })
+      return { space, did, didRootId: rootCapabilityId(`${did}/`) }
+    }
+
+    it('admits an exactly-DELETE grant whose target dereferences to the Space URL', async () => {
+      const { space, did, didRootId } = await provisionMappedSpace()
+      const capability = await delegate({
+        signer: alice.signer,
+        capability: didRootId,
+        invocationTarget: `${did}/`,
+        controller: bob.did,
+        allowedActions: ['DELETE']
+      })
+      const response = await signedInject({
+        server: { fastify, serverUrl: baseServerUrl },
+        path: `/space/${space.spaceId}/`,
+        signer: bob.signer,
+        method: 'DELETE',
+        capability
+      })
+      assert.equal(response.statusCode, 204, response.payload)
+    })
+
+    it('refuses a two-verb tail carrying DELETE (404)', async () => {
+      const { space, did, didRootId } = await provisionMappedSpace()
+      const capability = await delegate({
+        signer: alice.signer,
+        capability: didRootId,
+        invocationTarget: `${did}/`,
+        controller: bob.did,
+        allowedActions: ['GET', 'DELETE']
+      })
+      const response = await signedInject({
+        server: { fastify, serverUrl: baseServerUrl },
+        path: `/space/${space.spaceId}/`,
+        signer: bob.signer,
+        method: 'DELETE',
+        capability
+      })
+      assert.equal(response.statusCode, 404, response.payload)
+      await assertSpaceIntact({ space, controller: alice.did })
+    })
+
+    it('refuses a Collection Metadata write under a grant on the Collection container URL (404)', async () => {
+      const { space, did, didRootId } = await provisionMappedSpace()
+      const capability = await delegate({
+        signer: alice.signer,
+        capability: didRootId,
+        invocationTarget: `${did}/notes/`,
+        controller: bob.did,
+        allowedActions: WAS_ACTIONS
+      })
+      const response = await signedInject({
+        server: { fastify, serverUrl: baseServerUrl },
+        path: `/space/${space.spaceId}/notes/meta`,
+        signer: bob.signer,
+        method: 'PUT',
+        capability,
+        json: { name: 'Renamed under a DID URL container grant' }
+      })
+      assert.equal(response.statusCode, 404, response.payload)
+      const meta = await readCollectionMeta({ space, collectionId: 'notes' })
+      assert.notEqual(meta.name, 'Renamed under a DID URL container grant')
+    })
+
+    it('admits the same write under a grant whose target dereferences to the Space URL', async () => {
+      const { space, did, didRootId } = await provisionMappedSpace()
+      const capability = await delegate({
+        signer: alice.signer,
+        capability: didRootId,
+        invocationTarget: `${did}/`,
+        controller: bob.did,
+        allowedActions: WAS_ACTIONS
+      })
+      const response = await signedInject({
+        server: { fastify, serverUrl: baseServerUrl },
+        path: `/space/${space.spaceId}/notes/meta`,
+        signer: bob.signer,
+        method: 'PUT',
+        capability,
+        json: { name: 'Renamed under a DID URL Space grant' }
+      })
+      assert.equal(response.statusCode, 204, response.payload)
+      const meta = await readCollectionMeta({ space, collectionId: 'notes' })
+      assert.equal(meta.name, 'Renamed under a DID URL Space grant')
     })
   })
 })

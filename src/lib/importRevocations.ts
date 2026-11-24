@@ -23,14 +23,11 @@
  * link signed by a `did:webvh` whose history log the archive itself restores.
  */
 import type { FastifyBaseLogger } from 'fastify'
-import {
-  isUnderScope,
-  throwIfServerFault,
-  verifyRevocationChain
-} from '../zcap.js'
+import { throwIfServerFault, verifyRevocationChain } from '../zcap.js'
 import type { VerifiedInvocation } from '../zcap.js'
 import { DuplicateRevocationError, InvalidRevocationError } from '../errors.js'
 import { asList } from './chainCapability.js'
+import { isUnderScope } from './isUnderScope.js'
 import { absoluteUrl, spaceRevocationsPath } from './paths.js'
 import { revocationRecordFor } from './revocations.js'
 import type { WebvhResolverContext } from './webvhController.js'
@@ -63,7 +60,7 @@ export interface ImportRevocationScope {
    */
   invocation: Pick<
     VerifiedInvocation,
-    'rootInvocation' | 'invoker' | 'invokedCapability'
+    'rootInvocation' | 'invoker' | 'invokedCapability' | 'dereferencedTarget'
   >
 }
 
@@ -75,7 +72,10 @@ export interface ImportRevocationScope {
  * controller may revoke its own grant or one below it. A delegated
  * capability may do so when it reaches the revocation URL, by the zcap
  * library's `/`-boundary attenuation rule, with `POST` among its actions, or
- * with no `allowedAction`, which admits every action.
+ * with no `allowedAction`, which admits every action. The URL the delegated
+ * capability reaches is the one its target dereferences to, which for a
+ * chain rooted in a DID URL the import's own verification bounded within the
+ * Space.
  *
  * @param options {object}
  * @param options.invocation {VerifiedInvocation}   the import's invocation
@@ -85,7 +85,12 @@ export interface ImportRevocationScope {
  * @returns {boolean}
  */
 function invocationMayRevoke({
-  invocation: { rootInvocation, invoker, invokedCapability },
+  invocation: {
+    rootInvocation,
+    invoker,
+    invokedCapability,
+    dereferencedTarget
+  },
   chainControllers,
   revocationUrl
 }: {
@@ -99,13 +104,12 @@ function invocationMayRevoke({
   if (invoker !== undefined && chainControllers.includes(invoker)) {
     return true
   }
-  const { invocationTarget, allowedAction } = invokedCapability ?? {}
-  if (invocationTarget === undefined) {
+  if (invokedCapability === undefined || dereferencedTarget === undefined) {
     return false
   }
-  const actions = asList(allowedAction)
+  const actions = asList(invokedCapability.allowedAction)
   return (
-    isUnderScope({ target: revocationUrl, rootTarget: invocationTarget }) &&
+    isUnderScope({ target: revocationUrl, rootTarget: dereferencedTarget }) &&
     (actions.length === 0 || actions.includes('POST'))
   )
 }
@@ -160,7 +164,10 @@ export async function installImportRevocations({
         capability,
         rootTarget,
         rootController,
-        webvh
+        webvh,
+        // As on the revocation route of a Space: the root is not
+        // dereferenced, so the record installs wherever the DID now points.
+        admitDidUrlRoot: true
       })
       const revocationUrl = absoluteUrl({
         path: spaceRevocationsPath({ spaceId, revocationId: capabilityId }),

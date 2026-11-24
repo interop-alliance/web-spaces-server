@@ -27,8 +27,13 @@
  *   again, so a key the DID's controller retires stops verifying within one
  *   TTL.
  * - A signature naming a key the cached document lacks forces one fetch per DID
- *   per interval. A failed fetch or verification is remembered for a short
- *   time.
+ *   per interval. A DID URL root that does not dereference to the Space a
+ *   request addresses under the cached document takes the same one fetch, so
+ *   a missing key and a failed dereference share the interval. A failed fetch
+ *   or verification is remembered for a short time.
+ * - A DID URL target's version selector picks its version from the verified
+ *   log kept on the cache entry, with no second fetch. That version is
+ *   verified once per fetched log and selector set, and kept with the log.
  * - A first-contact fetch, of a DID with no verified head here, is counted
  *   against a per-host window and a global limit on concurrent fetches. Past
  *   either it is refused, not queued. A DID this resolver already verified
@@ -48,7 +53,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { LRUCache } from 'lru-cache'
 import { fetch, type Agent, type Dispatcher, type Response } from 'undici'
-import { readLogFromString } from '@interop/did-method-webvh'
+import { parseVersionId, readLogFromString } from '@interop/did-method-webvh'
 import type { DIDDoc, DIDLog } from '@interop/did-method-webvh'
 
 import {
@@ -63,6 +68,7 @@ import {
   PEER_WEBVH_MAX_CONCURRENT_FETCHES
 } from '../config.default.js'
 import { PeerLogFetchError, PeerWebvhResolutionError } from '../errors.js'
+import { verifiedVersionOf } from './didUrlTarget.js'
 import {
   pinnedAgentFor,
   readBodyBounded,
@@ -77,7 +83,8 @@ import {
   extendsHead,
   headOf,
   verifyWebvhLog,
-  type LogHead
+  type LogHead,
+  type TargetSelectors
 } from './webvhController.js'
 
 /**
@@ -94,10 +101,12 @@ export type PeerLogFetcher = (options: {
 }) => Promise<Uint8Array>
 
 /**
- * A verified foreign document and the monotonic time its log was fetched.
+ * A verified foreign document, the log it was verified from, and the
+ * monotonic time that log was fetched.
  */
 interface PeerEntry {
   doc: DIDDoc
+  log: DIDLog
   fetchedAt: number
 }
 
@@ -125,7 +134,8 @@ export class PeerWebvhResolver {
     ttl: PEER_WEBVH_FAILURE_TTL
   })
   /**
-   * DIDs that had a key-miss fetch within the interval.
+   * DIDs that had an early fetch within the interval: a key miss, or a DID
+   * URL root that did not dereference where a request required.
    */
   #keyMisses = new LRUCache<string, true>({
     max: PEER_WEBVH_CACHE_MAX,
@@ -228,12 +238,123 @@ export class PeerWebvhResolver {
     if (fetched || this.#keyMisses.has(did)) {
       throw keyNotListed({ did, keyId })
     }
-    this.#keyMisses.set(did, true)
-    const refreshed = await this.#refresh({ did, serverUrl })
+    const refreshed = await this.#refresh({ did, serverUrl, early: true })
     if (listsMethod({ doc: refreshed.doc, keyId })) {
       return refreshed.doc
     }
     throw keyNotListed({ did, keyId })
+  }
+
+  /**
+   * Resolves a foreign DID for a DID URL invocation target, at the version
+   * `selectors` names (the current one when there are none). The version is
+   * picked from the verified log kept on the cache entry, so a selector costs
+   * no fetch of its own, and verified from it once per fetched log and
+   * selector set (`verifiedVersionOf`). A DID this resolver may not fetch
+   * ({@link mayFetch}) is refused before any fetch.
+   *
+   * A selector naming a version after the cached log's last entry
+   * ({@link namesVersionAfter}) is not resolved: the result says `ahead`, so
+   * the caller may take the DID's early fetch and ask again. Every other
+   * selector is answered from the cached log, or refused.
+   * @param options {object}
+   * @param options.did {string}   a foreign `did:webvh`
+   * @param options.serverUrl {string}   this server's base URL
+   * @param options.selectors {object}   the target's version selectors
+   * @returns {Promise<{ ahead: false, doc: DIDDoc, fetched: boolean } |
+   *   { ahead: true, fetched: boolean }>}   `fetched` is true when this call
+   *   fetched the log
+   */
+  async resolveVersion({
+    did,
+    serverUrl,
+    selectors
+  }: {
+    did: string
+    serverUrl: string
+    selectors: TargetSelectors
+  }): Promise<
+    | { ahead: false; doc: DIDDoc; fetched: boolean }
+    | { ahead: true; fetched: boolean }
+  > {
+    if (!this.mayFetch({ did, serverUrl })) {
+      throw new PeerWebvhResolutionError({
+        did,
+        detail: 'it is not a did:webvh this server may fetch.'
+      })
+    }
+    const { entry, fetched } = await this.#current({ did, serverUrl })
+    if (Object.keys(selectors).length === 0) {
+      return { ahead: false, doc: entry.doc, fetched }
+    }
+    if (namesVersionAfter({ selectors, log: entry.log })) {
+      return { ahead: true, fetched }
+    }
+    const { doc } = await verifiedVersionOf({ did, log: entry.log, selectors })
+    return { ahead: false, doc, fetched }
+  }
+
+  /**
+   * The cached current document of a foreign DID, when it is within its TTL,
+   * read without a fetch and without touching the cache's recency.
+   * @param options {object}
+   * @param options.did {string}   a foreign `did:webvh`
+   * @param options.serverUrl {string}   this server's base URL
+   * @returns {DIDDoc | undefined}
+   */
+  cachedDocument({
+    did,
+    serverUrl
+  }: {
+    did: string
+    serverUrl: string
+  }): DIDDoc | undefined {
+    if (!this.mayFetch({ did, serverUrl })) {
+      return undefined
+    }
+    const cached = this.#documents.peek(did)
+    if (
+      cached === undefined ||
+      performance.now() - cached.fetchedAt >= PEER_WEBVH_CACHE_TTL
+    ) {
+      return undefined
+    }
+    return cached.doc
+  }
+
+  /**
+   * Whether a foreign DID's early fetch of the interval is spent (a key miss,
+   * or a DID URL root that did not dereference where a request required).
+   * @param options {object}
+   * @param options.did {string}   a foreign `did:webvh`
+   * @returns {boolean}
+   */
+  earlyFetchSpent({ did }: { did: string }): boolean {
+    return this.#keyMisses.has(did)
+  }
+
+  /**
+   * Fetches a foreign DID's log once more, when a DID URL root does not
+   * dereference to the Space a request addresses under the cached document.
+   * A DID gets one such early fetch per interval, shared with the key-miss
+   * fetch of {@link resolveKey}.
+   * @param options {object}
+   * @param options.did {string}   a foreign `did:webvh`
+   * @param options.serverUrl {string}   this server's base URL
+   * @returns {Promise<boolean>}   whether a fresh document was fetched
+   */
+  async refetchOnMismatch({
+    did,
+    serverUrl
+  }: {
+    did: string
+    serverUrl: string
+  }): Promise<boolean> {
+    if (!this.mayFetch({ did, serverUrl }) || this.#keyMisses.has(did)) {
+      return false
+    }
+    await this.#refresh({ did, serverUrl, early: true })
+    return true
   }
 
   /**
@@ -267,20 +388,24 @@ export class PeerWebvhResolver {
    * @param options {object}
    * @param options.did {string}
    * @param options.serverUrl {string}
+   * @param [options.early] {boolean}   the fetch is the DID's early fetch of
+   *   the interval (see {@link #fetchAndVerify})
    * @returns {Promise<PeerEntry>}
    */
   async #refresh({
     did,
-    serverUrl
+    serverUrl,
+    early = false
   }: {
     did: string
     serverUrl: string
+    early?: boolean
   }): Promise<PeerEntry> {
     const pending = this.#inFlight.get(did)
     if (pending !== undefined) {
       return await pending
     }
-    const work = this.#fetchAndVerify({ did, serverUrl })
+    const work = this.#fetchAndVerify({ did, serverUrl, early })
     this.#inFlight.set(did, work)
     try {
       return await work
@@ -298,17 +423,26 @@ export class PeerWebvhResolver {
    * first-contact fetch must fit the host window and the first-contact
    * concurrency limit; a known DID's fetch must fit the known concurrency
    * limit. A refusal by either limit is not remembered.
+   *
+   * An early fetch (a key miss, or a DID URL root that did not dereference
+   * where a request required) spends the DID's early fetch of the interval
+   * only once every check above has passed, right before the fetch starts,
+   * with no await between the check of the budget and its use. A fetch
+   * those checks refuse leaves the budget unspent.
    * @param options {object}
    * @param options.did {string}
    * @param options.serverUrl {string}
+   * @param options.early {boolean}   the fetch is an early fetch
    * @returns {Promise<PeerEntry>}
    */
   async #fetchAndVerify({
     did,
-    serverUrl
+    serverUrl,
+    early
   }: {
     did: string
     serverUrl: string
+    early: boolean
   }): Promise<PeerEntry> {
     const parsed = parseCrossHostWebvh(did, { serverUrl })
     if (parsed === undefined) {
@@ -333,6 +467,14 @@ export class PeerWebvhResolver {
         cause: failure
       })
     }
+    // A concurrent caller may have spent it since this one checked. From
+    // here to the fetch nothing is awaited.
+    if (early && this.#keyMisses.has(did)) {
+      throw new PeerWebvhResolutionError({
+        did,
+        detail: 'its early fetch of the interval is spent.'
+      })
+    }
     const kind = this.#heads.has(did) ? 'known' : 'firstContact'
     if (this.#running[kind] >= PEER_WEBVH_MAX_CONCURRENT_FETCHES) {
       throw new PeerWebvhResolutionError({
@@ -348,6 +490,9 @@ export class PeerWebvhResolver {
         did,
         detail: `too many log fetches to "${parsed.host}" in the window.`
       })
+    }
+    if (early) {
+      this.#keyMisses.set(did, true)
     }
     this.#running[kind]++
     try {
@@ -367,7 +512,7 @@ export class PeerWebvhResolver {
       }
       // The log extends the recorded head, so this only moves it forward.
       this.#heads.set(did, headOf(log))
-      const entry = { doc, fetchedAt: performance.now() }
+      const entry = { doc, log, fetchedAt: performance.now() }
       this.#documents.set(did, entry)
       return entry
     } catch (err) {
@@ -455,6 +600,47 @@ export class PeerWebvhResolver {
     }
     this.#hostFetches.set(host, recent)
     return allowed
+  }
+}
+
+/**
+ * Whether version selectors name a version after a log's last entry, one a
+ * longer log could hold. A log only grows, so these are the selectors a fresh
+ * fetch could answer where the cached log cannot:
+ *
+ * - `versionNumber` greater than the number of entries;
+ * - a well-formed `versionId` whose version number is greater than the number
+ *   of entries. A malformed one names no version, so it is not ahead.
+ *
+ * A `versionId` or `versionNumber` within the log's length names an entry it
+ * already holds or one no longer log can hold (another entry hash at that
+ * number), so it is answered from the cached log or refused. A `versionTime`
+ * is never ahead: a time after the last entry is answered by the last cached
+ * entry, the version current at that time as far as the log shows, and a time
+ * before the first entry names no version.
+ * @param options {object}
+ * @param options.selectors {object}   the target's version selectors
+ * @param options.log {DIDLog}   the cached verified log
+ * @returns {boolean}
+ */
+function namesVersionAfter({
+  selectors,
+  log
+}: {
+  selectors: TargetSelectors
+  log: DIDLog
+}): boolean {
+  const { versionNumber, versionId } = selectors
+  if (typeof versionNumber === 'number' && versionNumber > log.length) {
+    return true
+  }
+  if (typeof versionId !== 'string') {
+    return false
+  }
+  try {
+    return parseVersionId(versionId).versionNumber > log.length
+  } catch {
+    return false
   }
 }
 

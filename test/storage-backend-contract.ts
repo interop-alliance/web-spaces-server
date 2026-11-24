@@ -7667,6 +7667,75 @@ export function describeStorageBackendContract(options: ContractOptions): void {
         )
       })
 
+      it('does not reach another Space through a hostile registration id', async () => {
+        const { backend } = harness
+        const victim = 'space-replicas-victim'
+        await provisionSpace(backend, victim)
+        const stored = await backend.createReplica({
+          spaceId: victim,
+          record: replicaRegistration({ id: 'peer-v', spaceId: victim }),
+          pullsChunks: false
+        })
+        const victimBefore = (await backend.getSpaceMetadata({
+          spaceId: victim
+        }))!
+        // The decoded form of an encoded path. Joined unguarded under this
+        // Space's dir, the first names the victim's registration file; the
+        // second is the form the request-level case sends.
+        const hostileIds = [
+          `x/../../${victim}/.replica.peer-v`,
+          `x/../../${victim}/.space.meta.${victim}.json`
+        ]
+        /**
+         * Settles a backend call: `refused` when it rejects, else its value.
+         *
+         * @param promise {Promise<T>}
+         * @returns {Promise<T | 'refused'>}
+         */
+        async function settle<T>(promise: Promise<T>): Promise<T | 'refused'> {
+          try {
+            return await promise
+          } catch {
+            return 'refused'
+          }
+        }
+        for (const replicaId of hostileIds) {
+          // A backend may refuse the id or treat it as an opaque key no
+          // registration carries; either way it names nothing.
+          assert.ok(
+            [undefined, 'refused'].includes(
+              (await settle(backend.getReplica({ spaceId, replicaId }))) as any
+            ),
+            replicaId
+          )
+          assert.ok(
+            [undefined, 'refused'].includes(
+              (await settle(
+                backend.getReplicaState({ spaceId, replicaId })
+              )) as any
+            ),
+            replicaId
+          )
+          assert.ok(
+            [false, 'refused'].includes(
+              (await settle(
+                backend.deleteReplica({ spaceId, replicaId })
+              )) as any
+            ),
+            replicaId
+          )
+        }
+        // The victim's registration and Space Metadata object are untouched.
+        assert.deepEqual(
+          await backend.getReplica({ spaceId: victim, replicaId: 'peer-v' }),
+          stored
+        )
+        const victimAfter = (await backend.getSpaceMetadata({
+          spaceId: victim
+        }))!
+        assert.equal(metadataEtagOf(victimAfter), metadataEtagOf(victimBefore))
+      })
+
       it('a registration and a removal each advance the Space Metadata local segment', async () => {
         const { backend } = harness
         const before = (await backend.getSpaceMetadata({ spaceId }))!

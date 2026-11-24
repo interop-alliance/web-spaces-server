@@ -1560,12 +1560,27 @@ describe('Replication between two servers', () => {
       await createSpace({ server: replica, spaceId: 'inj-b' })
       const hostile = 'x%2F..%2F..%2Finj-b%2F.space.inj-b'
 
+      // The zcap library refuses a request URL whose path carries a dot
+      // segment behind an encoded separator, so the refusal comes at
+      // authorization, as the masked 404, before the handler runs. The
+      // storage guard the id would otherwise meet is covered at the backend
+      // (the storage contract's replica registrations).
       const removed = await call({
         server: replica,
         path: `/space/inj-a/replicas/${hostile}`,
         method: 'DELETE'
       })
-      assert.equal(removed.statusCode, 204, removed.payload)
+      assert.equal(removed.statusCode, 404, removed.payload)
+      assert.equal(removed.json().type, ProblemTypes.NOT_FOUND)
+      // An id authorization admits but no registration can carry, one that
+      // would name a registration's loop-state file, is answered by the
+      // handler without reaching storage.
+      const stateFile = await call({
+        server: replica,
+        path: '/space/inj-a/replicas/peer.state',
+        method: 'DELETE'
+      })
+      assert.equal(stateFile.statusCode, 204, stateFile.payload)
       const meta = await call({ server: replica, path: '/space/inj-b/meta' })
       assert.equal(meta.statusCode, 200, meta.payload)
       assert.equal(meta.json().id, 'inj-b')

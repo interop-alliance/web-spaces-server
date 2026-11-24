@@ -29,14 +29,7 @@ import {
   verifyRevocationChain
 } from '../zcap.js'
 import { isPlainObject } from '../lib/isPlainObject.js'
-import {
-  revocationChainInspector,
-  revocationRecordFor
-} from '../lib/revocations.js'
-import {
-  clientAnnexChainInspector,
-  composeChainInspectors
-} from '../lib/clientAnnexClause.js'
+import { revocationRecordFor } from '../lib/revocations.js'
 import { absoluteSpaceUrl } from '../lib/paths.js'
 import {
   KMS_MAX_CHAIN_LENGTH,
@@ -73,6 +66,8 @@ import { fetchSpace } from './spaceContext.js'
  *   `did:webvh` controller in the chain
  * @param [options.maxChainLength] {number}   max chain length, root included
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL (ms)
+ * @param options.admitDidUrlRoot {boolean}   also accept a chain rooted in a
+ *   DID URL root capability (a Space scope; see `verifyRevocationChain`)
  * @returns {Promise<object>}   `{ capabilityBody, delegator, chainControllers,
  *   capabilities }`
  */
@@ -83,7 +78,8 @@ async function validateSubmittedCapability({
   rootController,
   webvh,
   maxChainLength,
-  maxDelegationTtl
+  maxDelegationTtl,
+  admitDidUrlRoot
 }: {
   body: unknown
   revocationId: string
@@ -92,6 +88,7 @@ async function validateSubmittedCapability({
   webvh: WebvhResolverContext
   maxChainLength?: number
   maxDelegationTtl?: number
+  admitDidUrlRoot: boolean
 }) {
   if (!isPlainObject(body) || typeof body.id !== 'string') {
     throw new InvalidRevocationError({
@@ -117,7 +114,8 @@ async function validateSubmittedCapability({
     rootController,
     webvh,
     maxChainLength,
-    maxDelegationTtl
+    maxDelegationTtl,
+    admitDidUrlRoot
   })
   return { capabilityBody: body, ...verified }
 }
@@ -212,7 +210,9 @@ async function submitRevocation({
       rootController,
       webvh: { storage, serverBackends, serverUrl },
       maxChainLength,
-      maxDelegationTtl
+      maxDelegationTtl,
+      // A chain rooted in a DID URL is revocable in a Space.
+      admitDidUrlRoot: 'spaceId' in scope
     })
   } catch (err) {
     if (!(err instanceof InvalidRevocationError)) {
@@ -237,10 +237,18 @@ async function submitRevocation({
     // The *invoking* chain is checked against the store as on every other
     // route -- a revoked capability cannot authorize a revocation -- and
     // against the annex-chain clause, as in `handleZcapVerify`.
-    inspectCapabilityChain: composeChainInspectors([
-      revocationChainInspector({ storage, scope }),
-      clientAnnexChainInspector({ storage, serverBackends, serverUrl })
-    ]),
+    scope,
+    // A Space's DID URL root is accepted beside its https root, as on every
+    // other route of an existing Space. A keystore takes its https root
+    // alone.
+    admitDidUrlRoot: 'spaceId' in scope,
+    // A chain rooted in a DID URL, submitted by a delegate: its root must
+    // dereference to the Space the request addresses, which the verification
+    // decides once the invocation verified, before the store is consulted
+    // below. A chain that failed validation carries no root, and its 400 is
+    // surfaced next.
+    submittedDidUrlRoot: validated?.didUrlRoot,
+    targetResolver: request.server.peerWebvh,
     maxChainLength,
     maxDelegationTtl,
     requestName,

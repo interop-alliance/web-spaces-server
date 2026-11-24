@@ -53,6 +53,7 @@ import {
   client,
   delegate,
   openTempBackend,
+  pathHandler,
   requestError,
   rootZcap,
   provisionWebvhIdentity,
@@ -60,6 +61,8 @@ import {
   zcapClients
 } from './helpers.js'
 import type { WebvhIdentity } from './helpers.js'
+import { signedInject } from '../src/testing.js'
+import { rootCapabilityId } from '../src/zcap.js'
 
 /** The service-entry type IRI naming an account's current annex DID. */
 const DELEGATED_CLIENTS_SERVICE_TYPE = 'https://w3id.org/byoe#DelegatedClients'
@@ -1895,6 +1898,58 @@ describe('client-annex clause (ladder-VM delegation bounds)', () => {
         })
       )
       assert.equal(err.status, 404)
+    })
+  })
+
+  describe('a chain rooted in a DID URL decides on dereferenced targets', () => {
+    /**
+     * An account-controlled Space and a self-hosted `did:webvh`, apart from
+     * the account's, whose document maps `/` to that Space's URL.
+     *
+     * @returns {Promise<{ space: Awaited<ReturnType<typeof makeSpace>>,
+     *   did: string, didRootId: string }>}
+     */
+    async function makeMappedSpace() {
+      const space = await makeSpace({ controller: account.did })
+      const { did } = await provisionWebvhIdentity({
+        owner: alice,
+        baseServerUrl,
+        services: [
+          pathHandler({ id: '#space', path: '/', serviceEndpoint: space.url })
+        ]
+      })
+      return { space, did, didRootId: rootCapabilityId(`${did}/`) }
+    }
+
+    it('admits the GET half under the DID URL root: a Space Metadata read (200)', async () => {
+      const { space, did, didRootId } = await makeMappedSpace()
+      const { child, ladder } = await ladderChild({
+        capability: didRootId,
+        invocationTarget: `${did}/meta`
+      })
+      const response = await signedInject({
+        server: { fastify, serverUrl: baseServerUrl },
+        path: `/space/${space.spaceId}/meta`,
+        signer: ladder.signer,
+        capability: child
+      })
+      assert.equal(response.statusCode, 200, response.payload)
+      assert.equal(response.json().controller, account.did)
+    })
+
+    it('refuses a GET whose target dereferences to the Space URL itself (404)', async () => {
+      const { space, did, didRootId } = await makeMappedSpace()
+      const { child, ladder } = await ladderChild({
+        capability: didRootId,
+        invocationTarget: `${did}/`
+      })
+      const response = await signedInject({
+        server: { fastify, serverUrl: baseServerUrl },
+        path: `/space/${space.spaceId}/meta`,
+        signer: ladder.signer,
+        capability: child
+      })
+      assert.equal(response.statusCode, 404, response.payload)
     })
   })
 

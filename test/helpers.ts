@@ -13,11 +13,12 @@ import { EddsaJcs2022 } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import type { ISigner } from '@interop/data-integrity-core'
 import {
+  PATH_HANDLER_SERVICE_TYPE,
   readLogFromString,
   resolveDIDFromLog,
   updateDID
 } from '@interop/did-method-webvh'
-import type { DIDLog } from '@interop/did-method-webvh'
+import type { DIDLog, ServiceEndpoint } from '@interop/did-method-webvh'
 import { DataIntegrityProof } from '@interop/data-integrity-proof'
 import { createVerifyCryptosuite } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import { signCapabilityInvocation } from '@interop/http-signature-zcap-invoke'
@@ -1258,4 +1259,35 @@ export function appendAfterFirstServerLogAccess({
       metadataSpy.mockRestore()
     }
   }
+}
+
+/**
+ * Sleeps for `ms` milliseconds.
+ *
+ * @param ms {number}
+ * @returns {Promise<void>}
+ */
+export async function sleep(ms: number): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * A `PathHandler` service mounting `path` at `serviceEndpoint`.
+ *
+ * @param options {object}
+ * @param [options.id] {string}   defaults to one derived from `path`
+ * @param options.path {string}
+ * @param options.serviceEndpoint {string}
+ * @returns {ServiceEndpoint}
+ */
+export function pathHandler({
+  path,
+  id = path === '/' ? '#root' : `#${path.slice(1).replace(/\//g, '-')}`,
+  serviceEndpoint
+}: {
+  id?: string
+  path: string
+  serviceEndpoint: string
+}): ServiceEndpoint {
+  return { id, type: PATH_HANDLER_SERVICE_TYPE, path, serviceEndpoint }
 }

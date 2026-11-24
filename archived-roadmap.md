@@ -7758,3 +7758,97 @@ library limits chain length, which bounds the size of the list.
 
 On a public-read Collection the list shows the delegation structure to any
 reader. A reader cannot tell which entry is the author from the list alone.
+
+### WSS-245: [M] (*) DID-relative invocation targets dereferenced through `PathHandler` services
+
+- status: done
+- done: 2026-11-23
+- priority: medium
+- backend: *
+- labels: zcap, webvh, portability, spec
+- discovered-from: DID-relative URL verification question (2026-11-07)
+- touches:
+  - web-spaces-server (this repo): `src/zcap.ts` (`rootCapabilityLoader`,
+    `expectedRoots`, `verifyZcap`, the peer pre-pass),
+    `src/lib/webvhController.ts` and `src/lib/peerWebvh.ts` (resolving a
+    `did:webvh` this server does not host), `src/lib/containerRule.ts` and
+    `src/lib/clientAnnexClause.ts` (they read chain-link targets),
+    docs/webvh-controllers.md, ARCHITECTURE.md's ZCap Structure
+  - `@interop/zcap`: an async target-dereference hook consulted where the
+    proof's `invocationTarget` is compared with the invoked capability's
+    (shipped as `dereferenceTarget` in 12.1.0; package.json resolves 12.3.1)
+  - `@interop/http-signature-zcap-verify`: pass the hook through (shipped in
+    13.1.0; package.json resolves 13.2.0)
+  - `@interop/did-method-webvh`: PR 20 (`dereference`, `parseDidUrl`,
+    `selectPathHandler`, `pathHandlerUrl`), merged and published
+  - `@interop/ezcap`: 7.8.0 adds a `dereferenceTarget` option to `request()`.
+    Published; package.json and the lockfile resolve it from the npm registry.
+    ezcap has no roadmap file. The client item WCL-172 records the open question
+    of `read()` and `write()`
+  - storage-core: SC-15 exports one identifier constant per specification and
+    adds `features` to the authorization profile entry type. WSS-279 is the
+    follow-up here
+  - pws-client: WCL-107 (the authorization profile entry and
+    `hasFeature({ spec, feature })`), WCL-172 (the `did-url` subpath and the
+    `dereferenceTarget` option), WCL-173 (a delegate holding a DID-form grant)
+    and WCL-174 (issuing DID-form grants with `didUrl` on the Space handle)
+  - portable-web-spaces-spec: WASS-135, the zCap authorization profile text for
+    a DID URL as an `invocationTarget` and as the root capability's target, and
+    the `did-url-targets` token
+  - pws-conformance-suite: PWSCS-39, cases for the DID-form chain
+- acceptance:
+  - [x] Wire decisions recorded in `decisions/` and approved: the root
+        capability form `urn:zcap:root:<DID URL>`, whose target dereferences to
+        a Space URL on this server; a DID URL admitted as the `invocationTarget`
+        of every link beneath it; which `did:webvh` shapes a target may name
+        (self-hosted, replicated, not hosted here)
+  - [x] A chain whose root and links are DID URLs verifies against an https
+        request when the root dereferences to the Space the request addresses,
+        and the root's controller is that Space's controller
+  - [x] A DID URL that dereferences to another Space, to another host, or to a
+        path above the Space URL is refused as the masked `not-found`
+  - [x] The `PathHandler` entry is read from the current document on every
+        verification; no `versionId` pin is required, and a change of
+        `serviceEndpoint` moves what every grant under the DID addresses
+  - [x] A `did:webvh` this server does not host resolves under the
+        `PEER_WEBVH_*` bounds and `WAS_WEBVH_BLOCKLIST`, with a cache, and the
+        request signature is checked before any fetch
+  - [x] The container rule and the client-annex clause decide on dereferenced
+        targets
+  - [x] Tests: a promoted Space whose document carries a `PathHandler`; a Space
+        exported from one test server and imported on another, with a grant
+        issued before the move invoked after the `serviceEndpoint` is repointed
+  - [x] docs/webvh-controllers.md and ARCHITECTURE.md describe the mapping and
+        the authority rule
+
+Context: a Space should move to another provider and domain with its zcaps still
+working. Today every `invocationTarget` and every root capability names the
+https URL of the provider, so a move invalidates them all. With the DID URL path
+handling of `did:webvh`, a grant names
+`did:webvh:<scid>:<host>/images/image.jpg`, and the document's `PathHandler`
+service maps the path to the current https URL. The document is the user's, so
+repointing the service is the move, and no version pin is required.
+
+The whole chain lives in DID space. The root capability's target is the DID URL
+the Space is addressed under, and each delegated link attenuates it by the
+library's existing prefix rule, so the link-by-link check needs no change. The
+server synthesizes the root by dereferencing its target to an https URL,
+checking it is this server's and is the Space the request addresses, and giving
+the root that Space's controller. The chain must still be signed from that
+controller. The holder of the DID's update keys is trusted as the controller,
+since a change to the mapping can widen what an issued grant reaches within the
+Space. The one comparison that crosses schemes is the invocation point, where
+the https proof target meets the DID capability target; that needs an async hook
+in `@interop/zcap`, since the verifier's `url` also feeds the Cavage
+`(request-target)` and cannot be swapped for the DID URL. For `expectedTarget`
+the server maps the request URL back into DID form from the root's remainder.
+
+For portability the DID must be one the user keeps across providers, such as
+`did:webvh:<scid>:alice.example`, since the provider-hosted
+`did:webvh:<scid>:<host>:space:<S>:<C>` changes with the host and its old log
+stops being served. That DID is not hosted here, so the server resolves it over
+the network with the bounds the replication path already has. The local-only
+pre-pass checks the root only when the DID's document is stored or cached here.
+Whether such a DID may also be the Space controller is a separate decision.
+Related: the foreign `did:webvh` fetch bound (WSS-240) and the cross-host
+invoker research (WSS-162).

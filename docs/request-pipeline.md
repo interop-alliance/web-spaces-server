@@ -245,14 +245,17 @@ after the chain walk, and the walk raises an expired parent link before it gets
 there. So `denialError` repeats the match server-side (`invokerIsController`),
 reading the signing key id and the embedded capability from the request headers.
 
-The request signature is verified before any of this, and each named cause is
-raised only after every delegation proof in the chain verified. A named cause
-therefore reaches only the holder of the capability and its invoking key, and
-tells it something about its own grant: a revocation it did not see, or an
-`expires` it already carries. A copy of a revoked or expired grant invoked with
-any other key, a tampered proof, a wrong action, or a chain that never verified
-all stay the plain `not-found`. An under-authorized caller still cannot tell an
-absent target from one it may not see.
+The request signature is verified before any of this, and a cause is named only
+after every delegation proof in the chain verified. The revocation inspector
+runs after the whole chain walk, and the zcap library raises an expiry only once
+every delegation proof verified. A chain with an expired link and a forged or
+altered later link fails with the proof error, so it stays the plain
+`not-found`. A named cause therefore reaches only the holder of the capability
+and its invoking key, and tells it something about its own grant: a revocation
+it did not see, or an `expires` it already carries. A copy of a revoked or
+expired grant invoked with any other key, a tampered proof, a wrong action, or a
+chain that never verified all stay the plain `not-found`. An under-authorized
+caller still cannot tell an absent target from one it may not see.
 
 The policy fallback in `authorize.ts` is unchanged. A denial with a named cause
 still falls through to the target's access-control policy, and the error

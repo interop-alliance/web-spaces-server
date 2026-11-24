@@ -3,8 +3,8 @@
 This document covers how the server accepts, resolves and verifies a `did:webvh`
 as a Space controller, a delegator or the invoker of a capability. That includes
 promotion of a Space to a self-hosted DID, the rule that keeps its history log
-append-only, the resolver engaged on every verification path, and the one
-bounded network fetch of a foreign DID's log.
+append-only, the resolver engaged on every verification path, the bounded
+network fetch of a foreign DID's log, and DID URL invocation targets.
 [ARCHITECTURE.md](../ARCHITECTURE.md) holds the layer map and the glossary.
 
 ## Accepted controller shapes
@@ -24,8 +24,9 @@ appears here as a verification method inside the controller's document, not as
 the controller itself.
 
 Any other cross-host `did:webvh`, `did:web`, and every other method are refused
-as a controller or a delegator. The one network exception is described in
-[Foreign invokers resolved over the network](#foreign-invokers-resolved-over-the-network).
+as a controller or a delegator. The network exceptions are described in
+[Foreign invokers resolved over the network](#foreign-invokers-resolved-over-the-network)
+and [DID URL invocation targets](#did-url-invocation-targets).
 
 ## Self-hosted DIDs
 
@@ -166,9 +167,11 @@ Structure section. For the chain inspectors that run after verification, see
 
 ## Foreign invokers resolved over the network
 
-One bounded exception reaches the network. Any `did:webvh` on another host whose
-log this server does not store may invoke a delegated capability on the PWS
-routes. That covers a peer server's DID,
+Two bounded cases reach the network. The first is the invoker of a delegated
+capability, described here. The second is a DID named by a DID URL target (see
+[DID URL invocation targets](#did-url-invocation-targets)). Any `did:webvh` on
+another host whose log this server does not store may invoke a delegated
+capability on the PWS routes. That covers a peer server's DID,
 `did:webvh:<scid>:<host>:space:server:id`, and a service's or an agent's DID,
 under any path or none. It applies in `authorize()` and `fetchSpaceAndVerify()`.
 
@@ -195,7 +198,8 @@ Every refusal is the plain masked `not-found`.
 any DID on another host whose log this server does not store, with any path or
 none. It covers a peer server's own DID,
 `did:webvh:<scid>:<host>:space:server:id`, and a service's or an agent's DID. It
-resolves one only as the invoker of a delegated capability on the PWS routes.
+resolves one only as the invoker of a delegated capability on the PWS routes, or
+as the DID a DID URL target names.
 
 - The log is fetched from the URL the did:webvh method maps the DID to
   (`https://<host>/<path>/did.jsonl`, or `https://<host>/.well-known/did.jsonl`
@@ -208,7 +212,8 @@ resolves one only as the invoker of a delegated capability on the PWS routes.
 - A verified document is cached per DID in an LRU for a TTL, then fetched and
   verified again.
 - A signature that names a key the cached document lacks forces one fetch per
-  DID per interval.
+  DID per interval. A DID URL root that does not dereference to the Space a
+  request addresses takes the same fetch, so the two share the interval.
 - A failure is remembered briefly, so a failing host is not asked on every
   request.
 - A first-contact fetch is one for a DID with no verified head here. Those are
@@ -231,6 +236,216 @@ variable reaches the fetcher.
 
 The resolver is one per app, decorated as `peerWebvh`, and `mayFetch` tells it
 whether a DID may be fetched at all.
+
+## DID URL invocation targets
+
+A capability may name a `did:webvh` DID URL as its `invocationTarget`, such as
+`did:webvh:<scid>:alice.example/photos/cat.jpg`. A `PathHandler` service in the
+DID document maps the path to an https URL, and the server decides on that URL.
+Repointing the service's `serviceEndpoint` moves a Space to another provider,
+and the grants that name the DID URL keep working. A grant that names an https
+URL stays bound to the provider that issued it.
+
+The request is still an https request. The HTTP signature covers its URL. A DID
+URL chain and the https request meet where the library compares the invocation
+proof's `invocationTarget` with the dereferenced target of the invoked
+capability.
+
+A server lists `did-url-targets` in the `features` of its authorization profile
+entry (see [service-description.md](service-description.md)). A client reads it
+before it issues such a grant.
+
+### The root capability
+
+The root capability id is `urn:zcap:root:<url-encoded DID URL>`.
+
+- The DID URL ends in `/`. A Space has one root id per `PathHandler` path.
+- It carries no selector and no fragment. Such a root is refused.
+- It must dereference to exactly the canonical trailing-slash URL of the Space
+  the request addresses, on this server.
+- The server synthesizes it with the Space's controller. The holder of the DID's
+  update keys is the controller in this trust model. They can do what they want
+  with the mapping. The server synthesizes the root with the Space's stored
+  controller, and the chain must still be signed from that controller, so a DID
+  document cannot create authority over a Space of someone else. A mapping
+  change can widen an issued grant, as described under "The chain". The DID's
+  update keys should be held by the Space controller. A deployment where they
+  are separate parties trusts the DID's key holder with everything granted under
+  DID URL roots.
+
+A DID URL root is admitted on every route of an existing Space, Update Space
+included. Create Space takes an https root, since no Space exists yet for the
+DID URL to dereference to. Nobody signs the root, so it is always read from the
+current document, and a repoint moves every chain beneath it. The `/kms` routes
+take an https root alone.
+
+### The chain
+
+Every link beneath a DID URL root carries a DID URL `invocationTarget`. A chain
+that mixes the two forms is refused, whichever way it mixes. The library never
+attenuates a `did:` target to an https target or the reverse.
+
+Each link must dereference to a URL at or beneath the URL its parent
+dereferences to. The root dereferences to the Space URL, so every link stays
+inside the Space. This is the https attenuation rule applied to dereferenced
+URLs.
+
+- A link may dereference through a different `PathHandler` than its parent did.
+  A document may alias a path, such as `/pics` mapped to the `photos` Collection
+  URL of the same Space.
+- A handler that maps a path beneath a grant to a URL outside what the grant
+  reaches does not widen the grant. The check bounds the result, not the
+  handler.
+- A dereferenced URL must be in canonical form. One that a URL parser would
+  rewrite is refused. That covers a dot segment, in plain or percent-encoded
+  form, and a backslash.
+- A target that dereferences to another Space, another host, or a path above its
+  parent's URL is refused as the masked `not-found`.
+
+One document may serve several Spaces under different paths. Each Space has its
+own root DID URL.
+
+The rule bounds each link by its parent's URL at the time of the request, not at
+the time of issue. A `PathHandler` added to the document can make an issued
+grant reach more of the Space than its path suggests, up to the whole Space. For
+example, the document maps `/` to the Space and a grant on `did:X/trash/` allows
+`DELETE`. A new handler maps `/trash` to the Space URL. The grant now
+dereferences to the Space URL and passes the container rule for Delete Space.
+What remains is the bound that every link dereferences at or beneath its
+parent's URL and the root to the Space. A grant never reaches outside the Space
+its root dereferences to. A repoint of the root's handler can move a grant to
+another Space of the same controller.
+
+The container rule and the client-annex clause decide on dereferenced targets.
+The full verification shares one dereferencer between the library's hook and
+both inspectors, so it reads one document version per DID and selector set. The
+root synthesis does not dereference. The local-only pre-pass for a foreign
+invoker builds its own dereferencer, so that request may read the root's
+document twice.
+
+### Selectors
+
+A selector such as `versionId` chooses the version of the DID document that maps
+the path. An unpinned target is mapped by the current document. No pin is
+required.
+
+Attenuation between two DID URL targets checks the two parts separately.
+
+- The target is split at the first `?` or `#`.
+- The path part must equal the parent's, or extend it at a `/` boundary.
+- The selector part must be byte-identical to the parent's.
+- The link directly beneath the root may introduce selectors, since the root
+  carries none. The Space controller signs that link, so the choice of document
+  version is theirs.
+
+The rule keeps a delegate from changing the selector. An older version may map
+`/photos` to a different Collection, and a delegate that could add a pin would
+reach it. A target carrying a fragment is refused.
+
+The https request URL may extend its path or add a query to the invoked target's
+dereferenced URL. A query on the https request selects no DID document, so it is
+not held to the capability's selectors.
+
+### Which DID may be named
+
+A target may name a self-hosted `did:webvh` on this server, one replicated here,
+or one not hosted here. The first two resolve from the local copy of their log.
+A selector picks its version from that same verified log.
+
+A DID not hosted here resolves over the network, which is the second network
+case of this server (see
+[Foreign invokers resolved over the network](#foreign-invokers-resolved-over-the-network)).
+Portability depends on it, since the user keeps the DID across providers.
+
+- The request signature and every delegation proof are checked before the fetch
+  of the DID a target names. A request whose signature does not verify fetches
+  no target DID. The invoker fetch above is a separate case.
+- The fetch runs through the peer log resolver, under the same `PEER_WEBVH_*`
+  bounds and `WAS_WEBVH_BLOCKLIST`. A blocklisted DID is refused before any
+  fetch.
+- The verified document is cached for `PEER_WEBVH_CACHE_TTL`, 5 minutes. A
+  selector picks its version from the log kept on the cache entry and costs no
+  fetch of its own.
+- When the root does not dereference to the Space the request addresses under a
+  cached document, the server fetches once more. That covers a root that
+  dereferences to another host or another Space here, and a path no
+  `PathHandler` matches.
+- A DID gets one such early fetch per `PEER_WEBVH_KEY_MISS_REFETCH_INTERVAL`, 60
+  seconds. A missing key and a failed dereference share that budget. A
+  verification that already fetched the DID's log takes no second one.
+
+A pin that names a version after the cached log takes the same early fetch. That
+is a `versionNumber`, or the number part of a `versionId`, greater than the
+cached log's length. A `versionTime` does not refetch. A time after the last
+cached entry resolves to the last cached version. The early fetch is one budget
+per DID per interval with three triggers: a missing key, a root that does not
+dereference to the Space the request addresses, and a pin after the cached log.
+The budget is spent only when a fetch starts.
+
+When the invoker is also a `did:webvh` not hosted here, a pre-pass precedes the
+fetch of the invoker's log. It verifies every delegation proof and the
+revocation store. It also checks that the root dereferences to the Space the
+request addresses, whenever that needs no fetch. That is the case when the
+target DID's log is stored here or its document is cached.
+
+- A mismatch gives no grant, so the invoker's log is not fetched.
+- A mismatch under a cached document passes while that DID's early fetch is
+  unspent, since the full verification will refetch. This keeps a move from
+  locking a foreign invoker out.
+- A target DID neither stored nor cached passes to the full verification.
+- The link checks, the container rule and the client-annex clause run only in
+  the full verification.
+
+A refusal masks the status and the body. It does not mask the fetch. The holder
+of a valid grant on a DID not hosted here can present it at another Space id.
+The server fetches the DID's log only when that Space has the same controller,
+since the chain verifies there and the root mismatch takes the early fetch. The
+holder can see a slower answer, and the host of the log sees the request. The
+same holds when a delegate submits a revocation. It is limited to one probe per
+DID per interval and one per cache expiry. A target DID neither stored nor
+cached passes the pre-pass without a root check, so on the first probe a foreign
+invoker's log can be fetched before the full verification refuses.
+
+### Named denial causes
+
+A refusal of a DID URL chain names `capability-revoked` or `capability-expired`
+only when the chain's root dereferences to the Space the request addresses. Any
+other refusal is the plain `not-found`. The conditions for naming a cause in
+ARCHITECTURE.md's ZCap Structure still apply. The gate matters because the
+library raises an expiry before the dereference check runs. Without it, a grant
+for one Space presented at another would name its expiry when the two Spaces
+share a controller.
+
+### Revocation
+
+A DID URL chain is accepted for revocation in a Space scope when its root has
+the form above and its delegation proofs verify back to the Space's controller.
+
+- When a key of the Space's controller signs the submission, the root is not
+  dereferenced, under either root. Import Space does not dereference it either.
+  A stored revocation is keyed by delegator and capability id within the Space,
+  so it needs no mapping. An archived revocation is installed before the DID is
+  repointed, and it survives the move.
+- Any other party must dereference. When another party in the chain submits, the
+  root must dereference to the Space the request addresses. Otherwise a delegate
+  could submit its grant at any Space id and learn which Spaces share a
+  controller. The refusal is the masked `not-found`.
+- The submission's own invocation may be rooted in the Space's DID URL root. The
+  root capability of the revocation URL itself stays https, so no second DID URL
+  root form exists.
+- A keystore scope takes an https chain alone.
+
+### Moving a Space
+
+A move is an export, an import on the other server, and a repoint of the
+`PathHandler`. The grants that name the DID URL work on the new server
+unchanged, and revocations made before the move are in force there.
+
+The server the Space moved to picks up the repoint within about a minute. The
+server it moved from keeps serving its cached document until
+`PEER_WEBVH_CACHE_TTL` expires, so it may accept grants for up to 5 minutes
+after the repoint. Https grants issued for the old server do not work on the new
+one.
 
 ## The blocklist
 

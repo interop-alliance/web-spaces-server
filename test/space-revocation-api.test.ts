@@ -551,6 +551,35 @@ describe('Space zcap revocations (/space/:spaceId/zcaps/revocations)', () => {
         assert.equal(err.data.type, ProblemTypes.NOT_FOUND)
       })
 
+      it('an expired link above the direct parent names the expiry, and a forged tail is the plain not-found', async () => {
+        // The zcap library verifies every delegation proof before it raises
+        // an expiry. The forged link is a copy with its controller swapped
+        // and no new proof, so its chain fails on the proof instead.
+        const { child } = await mintExpiredParentChain()
+        const grandchild = await delegate({
+          signer: bob.signer,
+          capability: child,
+          invocationTarget: collectionUrl,
+          controller: aliceDelegatedApp.did,
+          allowedActions: ['GET'],
+          expires: new Date(Date.now() + 20 * 60 * 1000)
+        })
+        const forged = { ...grandchild, controller: alice.did }
+        shiftClockPastExpiry()
+
+        const expired = await requestError(
+          readDoc({ zcap: grandchild, signer: aliceDelegatedApp.signer })
+        )
+        assert.equal(expired.status, 404)
+        assert.equal(expired.data.type, ProblemTypes.CAPABILITY_EXPIRED)
+
+        const err = await requestError(
+          readDoc({ zcap: forged, signer: alice.signer })
+        )
+        assert.equal(err.status, 404)
+        assert.equal(err.data.type, ProblemTypes.NOT_FOUND)
+      })
+
       it('an expired capability that is also revoked reports the expiry', async () => {
         // The verifier checks expiry before it runs the revocation inspector,
         // so the first refusal wins; either way the grant is dead.
