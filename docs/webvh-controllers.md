@@ -377,7 +377,9 @@ Portability depends on it, since the user keeps the DID across providers.
 A pin that names a version after the cached log takes the same early fetch. That
 is a `versionNumber`, or the number part of a `versionId`, greater than the
 cached log's length. A `versionTime` does not refetch. A time after the last
-cached entry resolves to the last cached version. The early fetch is one budget
+cached entry resolves to the last cached version. After a pin's early fetch the
+root and every link are dereferenced again from the fresh log, so a chain is
+refused when that log maps the root elsewhere. The early fetch is one budget
 per DID per interval with three triggers: a missing key, a root that does not
 dereference to the Space the request addresses, and a pin after the cached log.
 The budget is spent only when a fetch starts.

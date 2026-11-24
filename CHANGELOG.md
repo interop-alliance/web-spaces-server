@@ -12,8 +12,8 @@
   provider with its grants intact by repointing the `PathHandler`.
 - A DID URL selector such as `versionId` chooses the DID document version that
   maps the path. Only the link directly beneath the root may introduce one.
-- The DID may be self-hosted, replicated here, or not hosted here. The log of
-  a DID not hosted here that a target names is fetched only after the request
+- The DID may be self-hosted, replicated here, or not hosted here. The log of a
+  DID not hosted here that a target names is fetched only after the request
   signature verifies, under the existing `PEER_WEBVH_*` bounds and
   `WAS_WEBVH_BLOCKLIST`.
 - A chain rooted in a DID URL is revocable in a Space, and Import Space installs
