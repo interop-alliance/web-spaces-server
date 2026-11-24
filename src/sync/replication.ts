@@ -11,7 +11,8 @@
  * - The peer's Collection listing, tombstones included. The registration's
  *   Collection list selects among them, and the Collection that holds the
  *   controller's history log is always selected. A selected tombstone is
- *   applied.
+ *   applied, unless this server already holds one at that stamp or a later
+ *   one.
  * - Each selected Collection's Metadata object, when this server does not
  *   hold that life of the Collection yet, and then its changes feed from the
  *   stored checkpoint. Every change document is applied by kind, and the
@@ -55,7 +56,10 @@
 import type { Readable } from 'node:stream'
 import type { FastifyBaseLogger } from 'fastify'
 import type { ISigner } from '@interop/data-integrity-core'
-import { isCreatedBy } from '@interop/storage-core'
+import {
+  isCollectionTombstoneSummary,
+  isCreatedBy
+} from '@interop/storage-core'
 import {
   MAX_CHUNK_INDEX,
   fileNameFor,
@@ -81,7 +85,11 @@ import { generationOfEtag } from '../lib/etag.js'
 import { invalidateCollectionGovernedDescriptors } from '../lib/governedDescriptorsCache.js'
 import { compareStamps, stampOf, withoutStampMembers } from '../lib/hlc.js'
 import { isPlainObject } from '../lib/isPlainObject.js'
-import { compareCodeUnits } from '../lib/pagination.js'
+import {
+  MAX_PAGE_SIZE,
+  compareCodeUnits,
+  cursorOfNextUrl
+} from '../lib/pagination.js'
 import {
   chunkPath,
   chunksContainerPath,
@@ -100,6 +108,7 @@ import {
 } from '../lib/policyCache.js'
 import {
   type ApplyResult,
+  decideCollectionTombstoneApply,
   decideResourceApply,
   isReceivableStamp,
   registrationStands
@@ -201,6 +210,10 @@ interface Loop {
   // Resource from the same checkpoint. In memory only, so a restart starts the count
   // over.
   chunkPullRetries: Map<string, ChunkPullRetryKey & { count: number }>
+  // The Collection ids whose tombstone apply threw. The next cycle applies
+  // such a tombstone even when this server holds it, which finishes a delete
+  // the fault cut short. In memory only: boot finishes one too.
+  tombstoneRetries: Set<string>
 }
 
 /**
@@ -356,7 +369,8 @@ export class ReplicationManager {
       replicaId,
       wakeRequested: false,
       stopped: false,
-      chunkPullRetries: new Map()
+      chunkPullRetries: new Map(),
+      tombstoneRetries: new Set()
     }
     this.#loops.set(key, loop)
     this.#schedule({ loop, delayMs: 0 })
@@ -780,18 +794,39 @@ export class ReplicationManager {
       spaceId,
       record
     })
-    for (const { id: collectionId, stamp } of listing.tombstones) {
-      // A delete of a Collection this registration does not pull must not
-      // remove a local Collection that happens to share its id.
-      if (!selects(collectionId)) {
+    // A delete of a Collection this registration does not pull must not
+    // remove a local Collection that happens to share its id.
+    const tombstones = listing.tombstones.filter(({ id }) => selects(id))
+    const held =
+      tombstones.length > 0
+        ? await this.#heldCollectionTombstones({ spaceId })
+        : new Map<string, WriteStamp>()
+    for (const { id: collectionId, stamp } of tombstones) {
+      // A tombstone the apply would skip over a held one is not applied, so
+      // the apply's lock on the Space is not taken for it.
+      const heldStamp = held.get(collectionId)
+      if (
+        heldStamp !== undefined &&
+        !loop.tombstoneRetries.has(collectionId) &&
+        decideCollectionTombstoneApply({
+          held: { kind: 'tombstone', stamp: heldStamp },
+          stamp
+        }) === 'skip'
+      ) {
+        // The Collection is deleted on both servers, so the loop keeps no
+        // state for it.
+        delete state.collections[collectionId]
         continue
       }
+      // An apply that throws leaves the id in the set for the next cycle.
+      loop.tombstoneRetries.add(collectionId)
       const result = await this.#storage.applyCollection({
         spaceId,
         replicaId,
         collectionId,
         collection: { deleted: true, stamp }
       })
+      loop.tombstoneRetries.delete(collectionId)
       if (result.outcome === 'unregistered') {
         return false
       }
@@ -1011,6 +1046,52 @@ export class ReplicationManager {
         policy: withoutStampMembers(served.json) as unknown as PolicyDocument
       })
     })
+  }
+
+  /**
+   * The stamp of every Collection tombstone the local Space holds, by
+   * Collection id. It is a listing read, which takes no write lock. The read
+   * only saves applies, so a listing page that fails does not fail the
+   * cycle. The stamps read before it are returned, and a tombstone missing
+   * from them is applied as if none were held.
+   * @param options {object}
+   * @param options.spaceId {string}   the local Space
+   * @returns {Promise<Map<string, WriteStamp>>}
+   */
+  async #heldCollectionTombstones({
+    spaceId
+  }: {
+    spaceId: string
+  }): Promise<Map<string, WriteStamp>> {
+    const held = new Map<string, WriteStamp>()
+    let cursor: string | undefined
+    try {
+      do {
+        // The largest page, since the filesystem backend reads every
+        // Collection record of the Space for each page.
+        const page = await this.#storage.listCollections({
+          spaceId,
+          cursor,
+          limit: MAX_PAGE_SIZE,
+          includeDeleted: true
+        })
+        for (const item of page.items) {
+          const stamp = isCollectionTombstoneSummary(item)
+            ? receivedStampOf(item)
+            : undefined
+          if (stamp !== undefined) {
+            held.set(item.id, stamp)
+          }
+        }
+        cursor = cursorOfNextUrl(page.next)
+      } while (cursor !== undefined)
+    } catch (err) {
+      this.#logger.warn(
+        { err, spaceId },
+        'Reading the held Collection tombstones failed; applying each one.'
+      )
+    }
+    return held
   }
 
   /**

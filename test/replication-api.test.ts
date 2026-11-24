@@ -12,11 +12,18 @@
  * (`replication.pullNow`) with the timers paused, so a test decides when a
  * server sees its peer.
  */
-import { it, describe, beforeAll, afterAll, vi } from 'vitest'
+import {
+  it,
+  describe,
+  beforeAll,
+  afterAll,
+  vi,
+  type MockInstance
+} from 'vitest'
 import assert from 'node:assert'
 import { ProblemTypes } from '@interop/storage-core'
 
-import type { IDID } from '../src/types.js'
+import type { IDID, StorageBackend } from '../src/types.js'
 
 import {
   delegate,
@@ -1439,6 +1446,155 @@ describe('Replication between two servers', () => {
         .items.find((item: any) => item.id === 'notes')
       assert.equal(tombstone.deleted, true)
       assert.equal(tombstone.originId, source.backend.originId)
+    })
+
+    /**
+     * How many of the spied `applyCollection` calls applied a tombstone for
+     * the `notes` Collection.
+     */
+    function notesTombstoneApplies(
+      applies: MockInstance<StorageBackend['applyCollection']>
+    ): number {
+      return applies.mock.calls.filter(
+        ([options]) =>
+          options.collectionId === 'notes' && options.collection.deleted
+      ).length
+    }
+
+    it('does not apply a tombstone it already holds again', async () => {
+      const applies = vi.spyOn(replica.backend, 'applyCollection')
+      try {
+        await pull({ server: replica, spaceId: 'mirror' })
+        await pull({ server: replica, spaceId: 'mirror' })
+        assert.equal(notesTombstoneApplies(applies), 0)
+      } finally {
+        applies.mockRestore()
+      }
+    })
+
+    it('applies the delete of a Collection created again on the peer', async () => {
+      source.clock.now += 5_000
+      const created = await call({
+        server: source,
+        path: '/space/home/notes/meta',
+        method: 'PUT',
+        json: { name: 'Notes again' }
+      })
+      assert.equal(created.statusCode, 201, created.payload)
+      source.clock.now += 5_000
+      const deleted = await call({
+        server: source,
+        path: '/space/home/notes/',
+        method: 'DELETE'
+      })
+      assert.equal(deleted.statusCode, 204)
+      const tombstoneOf = async ({
+        server,
+        spaceId
+      }: {
+        server: PeerServer
+        spaceId: string
+      }) => {
+        const listing = await call({
+          server,
+          path: `/space/${spaceId}/?include=deleted`
+        })
+        const { url: _url, ...tombstone } = listing
+          .json()
+          .items.find((item: any) => item.id === 'notes')
+        return tombstone
+      }
+      const held = await tombstoneOf({ server: replica, spaceId: 'mirror' })
+
+      const applies = vi.spyOn(replica.backend, 'applyCollection')
+      try {
+        // The replica never saw the second life, so it holds the first
+        // delete's tombstone when the second one is listed.
+        await pull({ server: replica, spaceId: 'mirror' })
+        await pull({ server: replica, spaceId: 'mirror' })
+        assert.equal(notesTombstoneApplies(applies), 1)
+      } finally {
+        applies.mockRestore()
+      }
+      const applied = await tombstoneOf({ server: replica, spaceId: 'mirror' })
+      assert.notDeepStrictEqual(applied, held)
+      assert.deepStrictEqual(
+        applied,
+        await tombstoneOf({ server: source, spaceId: 'home' })
+      )
+    })
+
+    it('goes on with the cycle when the held tombstones cannot be read', async () => {
+      const listings = vi
+        .spyOn(replica.backend, 'listCollections')
+        .mockRejectedValueOnce(new Error('A listing fault.'))
+      const applies = vi.spyOn(replica.backend, 'applyCollection')
+      try {
+        await pull({ server: replica, spaceId: 'mirror' })
+        // With no held stamp to compare, the tombstone is applied as before.
+        assert.equal(notesTombstoneApplies(applies), 1)
+      } finally {
+        listings.mockRestore()
+        applies.mockRestore()
+      }
+      const status = await statusOf({ server: replica, spaceId: 'mirror' })
+      assert.notEqual(status.state, 'backing-off')
+    })
+
+    it('applies a held tombstone again after its apply threw', async () => {
+      source.clock.now += 5_000
+      const created = await call({
+        server: source,
+        path: '/space/home/notes/meta',
+        method: 'PUT',
+        json: { name: 'Notes a third time' }
+      })
+      assert.equal(created.statusCode, 201, created.payload)
+      await pull({ server: replica, spaceId: 'mirror' })
+      const collectionIds = async () => {
+        const status = await statusOf({ server: replica, spaceId: 'mirror' })
+        return status.collections.map(({ id }: any) => id)
+      }
+      assert.ok((await collectionIds()).includes('notes'))
+      source.clock.now += 5_000
+      const deleted = await call({
+        server: source,
+        path: '/space/home/notes/',
+        method: 'DELETE'
+      })
+      assert.equal(deleted.statusCode, 204)
+
+      // The first apply stores the tombstone and then throws, as a fault in
+      // the delete's cascade would.
+      const apply = replica.backend.applyCollection.bind(replica.backend)
+      let faulted = false
+      const applies = vi
+        .spyOn(replica.backend, 'applyCollection')
+        .mockImplementation(async options => {
+          const result = await apply(options)
+          if (
+            !faulted &&
+            options.collectionId === 'notes' &&
+            options.collection.deleted
+          ) {
+            faulted = true
+            throw new Error('A fault after the tombstone was stored.')
+          }
+          return result
+        })
+      try {
+        await pull({ server: replica, spaceId: 'mirror' })
+        assert.equal(notesTombstoneApplies(applies), 1)
+        // The tombstone is held now, and the apply that threw is made again.
+        await pull({ server: replica, spaceId: 'mirror' })
+        assert.equal(notesTombstoneApplies(applies), 2)
+        await pull({ server: replica, spaceId: 'mirror' })
+        assert.equal(notesTombstoneApplies(applies), 2)
+      } finally {
+        applies.mockRestore()
+      }
+      // Deleted on both servers, so the loop state keeps no entry for it.
+      assert.ok(!(await collectionIds()).includes('notes'))
     })
 
     it('backs off when the peer Space is gone', async () => {

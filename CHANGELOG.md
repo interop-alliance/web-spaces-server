@@ -7,6 +7,9 @@
 - The service description's spec identifiers are imported from
   `@interop/storage-core` (0.47.0) in place of local constants. The served
   document is unchanged.
+- A pull cycle no longer applies a source server's Collection tombstone that
+  this server already holds at the same stamp or a later one. An idle cycle
+  takes no write lock on the Space for them.
 
 ## 0.47.0 - 2026-11-23
 
