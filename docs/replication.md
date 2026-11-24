@@ -541,6 +541,20 @@ shares with `lib/webvhLogLocation.ts`, so the two cannot drift. A selected
 tombstone is applied. One for a Collection the registration does not pull is
 ignored, so it cannot remove a local Collection that shares its id.
 
+A selected tombstone this server already holds, at the listed stamp or a later
+one, is not applied again. The loop reads the local Space's listing under
+`includeDeleted` once per cycle, and only when the source server lists a
+selected tombstone. That read takes no write lock, so an idle cycle takes
+neither the exclusive side of the filesystem Space gate nor a Postgres `spaces`
+row lock for the tombstones the source server has accumulated. The loop state
+keeps no entry for a Collection both servers hold as a tombstone.
+
+The read only saves applies. When a page of the local listing fails, the cycle
+goes on and applies each tombstone the read did not cover, as if none were held.
+A tombstone whose apply threw is applied again in the next cycle even when this
+server now holds it, so a delete the fault cut short is finished. That retry is
+kept in memory only, since boot finishes such a delete too.
+
 For each selected live Collection the loop applies the Collection Metadata
 object when this server does not hold that life of the Collection, then reads
 its `changes` feed from the stored checkpoint and applies each document by

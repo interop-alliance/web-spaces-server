@@ -7887,3 +7887,38 @@ Context: the server defines the service description identifiers itself, and
 widens the authorization profile entry type locally to carry the
 `did-url-targets` token. storage-core now owns both, so the copies go. Filed
 with WSS-245 so the cleanup is not lost. It changes no wire output.
+
+### WSS-204: [L] (*) Stop re-applying a peer's Collection tombstones on every pull cycle
+
+- status: done
+- done: 2026-11-24
+- priority: low
+- backend: *
+- labels: performance, replication, filesystem-backend, postgres-backend
+- discovered-from: simplify pass over the replication change (2026-10-04)
+- acceptance:
+  - [x] A pull cycle calls `applyCollection` for a selected tombstone only when
+        this server does not already hold a tombstone at that stamp or a later
+        one for the Collection id
+  - [x] An idle cycle over a peer Space with tombstones takes neither the
+        exclusive side of the filesystem Space gate nor a Postgres `spaces` row
+        lock for them
+  - [x] A new tombstone, and a tombstone for a Collection re-created and deleted
+        again on the peer, is still applied in the cycle that first lists it
+  - [x] Tests in `test/`: after a tombstone is applied, later cycles make no
+        `applyCollection` call for it (observable through a counter on the
+        backend), and a later delete of a re-created Collection is applied
+
+Context: the pull loop lists the peer Space under `?include=deleted` and calls
+`applyCollection` for each selected tombstone, every cycle. Tombstones are never
+reaped (WSS-13), so the count only grows. Each call answers `skipped` after the
+first. On the filesystem backend the call runs on the exclusive side of the
+Space gate, which blocks every other write on the Space while it holds. On
+Postgres it opens a transaction and locks the `spaces` row. The cost per cycle
+and per registration is one such acquisition for every tombstone the peer has
+ever made.
+
+Two ways to decide without the lock: a read of the local Collection record
+before the call, or the stamps of the tombstones already applied kept in the
+registration's loop state. WSS-196 bounds what tombstones cost a request. This
+item is the pull loop's share of the same growth.

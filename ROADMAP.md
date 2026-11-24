@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 281
+nextAvailableId: 282
 
 <!-- roadmap-order:index:start -->
 
@@ -41,6 +41,7 @@ Ready:
 - WSS-193 [L] (*) `epoch` moves on a `/meta` write without a content stamp
 - WSS-249 [L] (*) Import checks the manifest's position and its one Space
 - WSS-251 [L] (*) The quota report covers every backend the Space lists
+- WSS-281 [L] (*) Retry the data-backend sweep of a replicated Collection delete
 
 Waiting on another repo:
 
@@ -134,8 +135,6 @@ Ready:
   its body
 - WSS-212 [M] (*) Open a Resource's byte stream lazily so a conditional read
   costs one metadata read
-- WSS-204 [L] (*) Stop re-applying a peer's Collection tombstones on every pull
-  cycle
 - WSS-199 [L] (*) Verify a peer invoker's delegation chain once
 - WSS-77 [L] (fs) Per-Collection filename cache on the filesystem backend
 
@@ -745,6 +744,32 @@ item's decision.
 `SpaceRequest.quotas` reports `serverBackends.all()` only. The backends listing
 of the same Space also carries `default` and each registered external backend,
 and the spec's quota example shows both kinds.
+
+### WSS-281: [L] (*) Retry the data-backend sweep of a replicated Collection delete
+
+- status: todo
+- priority: low
+- backend: *
+- labels: replication, mirror, mixed-backends
+- discovered-from: WSS-204 (code review, 2026-11-24), read from the code and not
+  reproduced
+- acceptance:
+  - [ ] After a tombstone is applied on the control plane and the sweep of the
+        other server backends throws, a later pull cycle removes the Collection
+        copy those backends hold
+  - [ ] A skipped tombstone apply over a live Collection that wins sweeps
+        nothing
+  - [ ] Test in `test/`: the sweep faults once after an applied tombstone, and
+        the copy is gone after a later cycle
+
+Context: the mirroring wrapper's `applyCollection` sweeps the other server
+backends only when the control plane answers `applied`. A sweep that throws
+after the control plane stored the tombstone is not run again, since every later
+apply of that tombstone is `skipped`, and the pull loop no longer applies a
+tombstone this server holds. The request path's Delete Collection wrapper sweeps
+on a repeat delete too. `skipped` also covers a live Collection that wins over
+the tombstone, so the retry needs its own check that the control plane holds a
+tombstone.
 
 ## Spec and protocol
 
@@ -2166,40 +2191,6 @@ worth as much on Postgres as on the filesystem backend once Postgres is a
 deployment target for the wallet log workloads that motivated the 304 path.
 `StorageBackend` and `ResourceResult` are server-local types with no implementer
 outside this repo, so the shape change needs no cross-repo follow-up.
-
-### WSS-204: [L] (*) Stop re-applying a peer's Collection tombstones on every pull cycle
-
-- status: todo
-- priority: low
-- backend: *
-- labels: performance, replication, filesystem-backend, postgres-backend
-- discovered-from: simplify pass over the replication change (2026-10-04)
-- acceptance:
-  - [ ] A pull cycle calls `applyCollection` for a selected tombstone only when
-        this server does not already hold a tombstone at that stamp or a later
-        one for the Collection id
-  - [ ] An idle cycle over a peer Space with tombstones takes neither the
-        exclusive side of the filesystem Space gate nor a Postgres `spaces` row
-        lock for them
-  - [ ] A new tombstone, and a tombstone for a Collection re-created and deleted
-        again on the peer, is still applied in the cycle that first lists it
-  - [ ] Tests in `test/`: after a tombstone is applied, later cycles make no
-        `applyCollection` call for it (observable through a counter on the
-        backend), and a later delete of a re-created Collection is applied
-
-Context: the pull loop lists the peer Space under `?include=deleted` and calls
-`applyCollection` for each selected tombstone, every cycle. Tombstones are never
-reaped (WSS-13), so the count only grows. Each call answers `skipped` after the
-first. On the filesystem backend the call runs on the exclusive side of the
-Space gate, which blocks every other write on the Space while it holds. On
-Postgres it opens a transaction and locks the `spaces` row. The cost per cycle
-and per registration is one such acquisition for every tombstone the peer has
-ever made.
-
-Two ways to decide without the lock: a read of the local Collection record
-before the call, or the stamps of the tombstones already applied kept in the
-registration's loop state. WSS-196 bounds what tombstones cost a request. This
-item is the pull loop's share of the same growth.
 
 ### WSS-199: [L] (*) Verify a peer invoker's delegation chain once
 
