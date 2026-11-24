@@ -5,6 +5,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { decodeSecretKeySeed } from '@interop/bnid'
+import { PWS_SPEC_ID } from '@interop/storage-core'
 import { SERVER_BACKEND_IDS, isServerBackendId } from './lib/serverBackends.js'
 import { parseKekMultibase } from './lib/kmsRecordCipher.js'
 import { ORIGIN_ID_PATTERN, isValidOriginId } from './lib/originId.js'
@@ -368,26 +369,10 @@ export const CORS_PROXY_AGENT_CACHE_TTL = 300_000 // milliseconds
 export const RESOLVED_BACKEND_CACHE_MAX = 1_000
 
 /**
- * The PWS specification's persistent identifier, the key of its entry in the
- * service description's `specs` object. Provisional until the specification's
- * rename registers it.
- */
-export const SPEC_IDENTIFIER = 'https://w3id.org/pws'
-
-/**
  * The PWS specification version this server's route table implements, as the
  * service description advertises it (`major.minor`, no patch level).
  */
 export const SPEC_VERSION = '0.5'
-
-/**
- * The zCap authorization profile's persistent identifier, the key of its entry
- * in the service description's `specs` object. Listing the profile is how a
- * client learns this server authorizes requests with capability invocations,
- * and the entry -- not the PWS entry -- carries the signature algorithms and
- * delegation cryptosuites the server accepts.
- */
-export const AUTHZ_PROFILE_IDENTIFIER = 'https://w3id.org/pws/authz-profile'
 
 /**
  * The version of the zCap authorization profile this server implements, as the
@@ -403,16 +388,6 @@ export const AUTHZ_PROFILE_URL =
   'https://w3c-ccg.github.io/portable-web-spaces-spec/authz-profile/'
 
 /**
- * The Encrypted Collections profile's persistent identifier, the key of its
- * entry in the service description's `specs` object. Listing the profile claims
- * this server serves its required surface -- the chunk endpoints -- and the
- * entry's `features` array names which of its two optional affordances it
- * serves.
- */
-export const ENCRYPTED_COLLECTIONS_IDENTIFIER =
-  'https://w3id.org/pws/encrypted-collections'
-
-/**
  * The version of the Encrypted Collections profile this server implements, as
  * the service description advertises it (`major.minor`, no patch level).
  */
@@ -426,34 +401,16 @@ export const ENCRYPTED_COLLECTIONS_URL =
   'https://interop-alliance.github.io/encrypted-collections-spec/'
 
 /**
- * The client annex profile's persistent identifier, the key of its entry in the
- * service description's `specs` object. Listing the profile claims this server
- * enforces the client-annex delegation clause (`lib/clientAnnexClause.ts`) on
- * every verification, which is the positive signal a wallet checks before it
- * signs up an account on this server: the clause fails open on a server that
- * does not implement it. Provisional until the `pws`
- * namespace is registered.
- */
-export const CLIENT_ANNEX_IDENTIFIER = 'https://w3id.org/pws/client-annex'
-
-/**
  * The version of the client annex profile this server implements, as the
  * service description advertises it (`major.minor`, no patch level). `0.1`
  * claims the clause as this server enforces it, with its seven admission
  * predicates; a change to what the clause admits is a new version. The entry
- * carries no `url` until the profile text is published.
+ * carries no `url` until the profile text is published. Listing the entry
+ * claims this server enforces the clause (`lib/clientAnnexClause.ts`) on every
+ * verification. A wallet checks for it before it signs up an account here,
+ * since the clause fails open on a server that does not implement it.
  */
 export const CLIENT_ANNEX_VERSION = '0.1'
-
-/**
- * The replication specification's persistent identifier, the key of its entry
- * in the service description's `specs` object. Listing it claims this server
- * serves the `replicas` registration sub-resource, the pull loop and the
- * apply path. A registration reads the peer's entry and refuses a peer that
- * lists none at a version this server speaks. Provisional until the `pws`
- * namespace is registered.
- */
-export const REPLICATION_IDENTIFIER = 'https://w3id.org/pws/replication'
 
 /**
  * The version of the replication specification this server implements
@@ -471,15 +428,6 @@ export const REPLICATION_VERSION = '0.1'
  */
 export const REPLICATION_URL =
   'https://w3c-ccg.github.io/portable-web-spaces-spec/replication/'
-
-/**
- * The Portable Wallet Profile's persistent identifier, the key of its entry in
- * the service description's `specs` object. Listing it claims this server
- * meets the profile's "Server requirements", a set of core and Encrypted
- * Collections `features` tokens that `serviceDescription.ts` checks. The entry
- * is a shorthand for those tokens and adds no route.
- */
-export const WALLET_PROFILE_IDENTIFIER = 'https://w3id.org/pws/wallet-profile'
 
 /**
  * The version of the Portable Wallet Profile this server satisfies, as the
@@ -516,37 +464,37 @@ export const SERVICE_LINK_RELATION = 'service'
  * Linkset relation URI for the access-control `policy` auxiliary resource
  * (RFC9264 linkset discovery; see src/policy.ts and the linkset handlers).
  */
-export const POLICY_LINK_RELATION = `${SPEC_IDENTIFIER}#policy`
+export const POLICY_LINK_RELATION = `${PWS_SPEC_ID}#policy`
 
 /**
  * Linkset relation URI for a Collection's selected `backend` auxiliary resource
  * (RFC9264 linkset discovery; advertised at `/space/{id}/{cid}/backend`).
  */
-export const BACKEND_LINK_RELATION = `${SPEC_IDENTIFIER}#backend`
+export const BACKEND_LINK_RELATION = `${PWS_SPEC_ID}#backend`
 
 /**
  * Linkset relation URI for a Collection's `quota` report auxiliary resource
  * (RFC9264 linkset discovery; advertised at `/space/{id}/{cid}/quota`).
  */
-export const QUOTA_LINK_RELATION = `${SPEC_IDENTIFIER}#quota`
+export const QUOTA_LINK_RELATION = `${PWS_SPEC_ID}#quota`
 
 /**
  * Linkset relation URI for a Space's `backends-available` auxiliary resource
  * (RFC9264 linkset discovery; advertised at `/space/{id}/backends`).
  */
-export const BACKENDS_AVAILABLE_LINK_RELATION = `${SPEC_IDENTIFIER}#backends-available`
+export const BACKENDS_AVAILABLE_LINK_RELATION = `${PWS_SPEC_ID}#backends-available`
 
 /**
  * Linkset relation URI for a Space's `replicas` registration listing
  * (RFC9264 linkset discovery; advertised at `/space/{id}/replicas`).
  */
-export const REPLICAS_LINK_RELATION = `${SPEC_IDENTIFIER}#replicas`
+export const REPLICAS_LINK_RELATION = `${PWS_SPEC_ID}#replicas`
 
 /**
  * Linkset relation URI for a Space's `quotas` report auxiliary resource
  * (RFC9264 linkset discovery; advertised at `/space/{id}/quotas`).
  */
-export const QUOTAS_LINK_RELATION = `${SPEC_IDENTIFIER}#quotas`
+export const QUOTAS_LINK_RELATION = `${PWS_SPEC_ID}#quotas`
 
 /**
  * Fraction of a backend's configured capacity at or above which its quota

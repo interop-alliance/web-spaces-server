@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 280
+nextAvailableId: 281
 
 <!-- roadmap-order:index:start -->
 
@@ -119,6 +119,8 @@ Ready:
 - WSS-184 [L] (*) Write-time creation and revision statements
 - WSS-221 [L] (*) Registration check under the data backend's lock for a
   Resource apply
+- WSS-280 [L] (*) A replica registration reads only peer service entries it can
+  use
 - WSS-229 [L] (*) A pause stops an in-flight pull cycle at its next apply
 - WSS-257 [L] (*) A delegated `PUT` may keep a paused mapping registration
   paused
@@ -170,8 +172,6 @@ Waiting on another repo:
   domain move) (after CLI-22)
 - WSS-244 [L] (*) Rename the epoch-configuration state type in test fixtures
   (after WASS-84)
-- WSS-279 [L] (*) Import the service description spec identifiers from
-  storage-core (after SC-15)
 
 **Someday / Maybe**
 
@@ -1930,6 +1930,35 @@ contract rather than confined to the loop.
 
 ---
 
+### WSS-280: [L] (*) A replica registration reads only peer service entries it can use
+
+- status: todo
+- priority: low
+- backend: *
+- labels: replication, service-description
+- discovered-from: WSS-279 code review (2026-11-23)
+- acceptance:
+  - [ ] Decide whether the chunk pull needs the peer's Encrypted Collections
+        entry at `ENCRYPTED_COLLECTIONS_VERSION`, as the replication check needs
+        `REPLICATION_VERSION`, or at any version
+  - [ ] `assertPeerServes` counts an Encrypted Collections entry toward
+        `pullsChunks` only when it carries a string `version` that meets that
+        decision
+  - [ ] The `originId` lookup reads only core entries that carry a string
+        `version`
+  - [ ] A test registers against a peer whose `/service` lists the Encrypted
+        Collections identifier with `[{}]` and stores `pullsChunks: false`
+  - [ ] `docs/replication.md` states the rule
+
+Context: `assertPeerServes` in `src/sync/registration.ts` requires the peer's
+replication entry at `REPLICATION_VERSION`. Its other two lookups take any
+plain-object entry. A peer that lists the Encrypted Collections identifier with
+an entry that has no `version`, or only a version this server does not speak, is
+stored with `pullsChunks: true`. The pull loop then requests chunk listings the
+peer may answer 404 or 405. `docs/replication.md` describes the chunk decision
+as the peer listing the entry, so the version rule is a behavior change to
+decide first. Pre-existing, not caused by WSS-279.
+
 ### WSS-229: [L] (*) A pause stops an in-flight pull cycle at its next apply
 
 - status: todo
@@ -2909,40 +2938,6 @@ optional half.
 Reported by the audit and not re-checked case by case. Confirm each duplicate
 covers no branch of its own before removing it. `test/perf-lib.test.ts` covers
 the benchmark script under `scripts/performance/`, not the server.
-
-### WSS-279: [L] (*) [after SC-15] Import the service description spec identifiers from storage-core
-
-- status: todo
-- priority: low
-- backend: *
-- labels: service-description, refactor, dependencies
-- discovered-from: WSS-245 (2026-11-23)
-- blocked-by: SC-15
-- touches:
-  - web-spaces-server (this repo): `src/config.default.ts` (the `*_IDENTIFIER`
-    constants), `src/serviceDescription.ts`, `package.json` (the storage-core
-    range)
-  - storage-core: SC-15 adds the constants and the `features` member. Published
-    as 0.47.0, which package.json and the lockfile resolve from the npm registry
-  - pws-client: WCL-107 makes the same move there
-- acceptance:
-  - [ ] `src/serviceDescription.ts` imports `PWS_SPEC_ID`,
-        `AUTHZ_PROFILE_SPEC_ID`, `ENCRYPTED_COLLECTIONS_SPEC_ID`,
-        `CLIENT_ANNEX_SPEC_ID`, `REPLICATION_SPEC_ID` and
-        `WALLET_PROFILE_SPEC_ID` from `@interop/storage-core` in place of its
-        `*_IDENTIFIER` constants
-  - [ ] The local `*_IDENTIFIER` constants are removed from
-        `src/config.default.ts`, and every other importer of them moves
-  - [ ] The `& { features: string[] }` addition on the authorization profile
-        entry's `satisfies` clause is removed, since `AuthzProfileVersionEntry`
-        carries `features`
-  - [ ] The service description output is byte-identical to before, and the
-        existing service description tests pass unchanged
-
-Context: the server defines the service description identifiers itself, and
-widens the authorization profile entry type locally to carry the
-`did-url-targets` token. storage-core now owns both, so the copies go. Filed
-with WSS-245 so the cleanup is not lost. It changes no wire output.
 
 ### WSS-275: [L] (fs) Cover the filesystem clock across a reopen and the open-time sweeps
 

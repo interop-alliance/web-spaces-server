@@ -23,11 +23,9 @@ import { DataIntegrityProof } from '@interop/data-integrity-proof'
 import { createVerifyCryptosuite } from '@interop/ed25519-signature/eddsa-jcs-2022'
 import { signCapabilityInvocation } from '@interop/http-signature-zcap-invoke'
 import jsigs from '@interop/jsonld-signatures'
+import { ENCRYPTED_COLLECTIONS_SPEC_ID } from '@interop/storage-core'
 
-import {
-  ENCRYPTED_COLLECTIONS_IDENTIFIER,
-  ENCRYPTED_COLLECTIONS_VERSION
-} from '../src/config.default.js'
+import { ENCRYPTED_COLLECTIONS_VERSION } from '../src/config.default.js'
 import { PostgresBackend } from '../src/backends/postgres.js'
 import type { PostgresBackendOptions } from '../src/backends/postgres.js'
 import type { EtagValidator } from '../src/lib/etag.js'
@@ -720,7 +718,7 @@ export async function assertEncryptedCollectionsFeature({
   const document = (await response.json()) as {
     specs: Record<string, Array<{ version: string; features?: string[] }>>
   }
-  const entries = document.specs[ENCRYPTED_COLLECTIONS_IDENTIFIER] ?? []
+  const entries = document.specs[ENCRYPTED_COLLECTIONS_SPEC_ID] ?? []
   const entry = entries.find(
     candidate => candidate.version === ENCRYPTED_COLLECTIONS_VERSION
   )

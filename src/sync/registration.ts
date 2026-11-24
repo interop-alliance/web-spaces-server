@@ -8,14 +8,14 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { ISigner } from '@interop/data-integrity-core'
 import type { DIDDoc } from '@interop/did-method-webvh'
-import { isCreatedBy } from '@interop/storage-core'
-
 import {
-  REPLICATION_IDENTIFIER,
-  REPLICATION_VERSION,
-  SPEC_IDENTIFIER,
-  ENCRYPTED_COLLECTIONS_IDENTIFIER
-} from '../config.default.js'
+  ENCRYPTED_COLLECTIONS_SPEC_ID,
+  PWS_SPEC_ID,
+  REPLICATION_SPEC_ID,
+  isCreatedBy
+} from '@interop/storage-core'
+
+import { REPLICATION_VERSION } from '../config.default.js'
 import {
   InvalidRequestBodyError,
   PeerRequestError,
@@ -427,17 +427,17 @@ async function assertPeerServes({
     return Array.isArray(entries) ? entries.filter(isPlainObject) : []
   }
   if (
-    !entriesOf(REPLICATION_IDENTIFIER).some(
+    !entriesOf(REPLICATION_SPEC_ID).some(
       entry => entry.version === REPLICATION_VERSION
     )
   ) {
     throw new ReplicaRefusedError({
       detail:
         'The peer does not list the replication specification ' +
-        `("${REPLICATION_IDENTIFIER}") at version ${REPLICATION_VERSION}.`
+        `("${REPLICATION_SPEC_ID}") at version ${REPLICATION_VERSION}.`
     })
   }
-  const originId = entriesOf(SPEC_IDENTIFIER)
+  const originId = entriesOf(PWS_SPEC_ID)
     .map(entry => entry.originId)
     .find(value => typeof value === 'string')
   if (originId === undefined) {
@@ -453,7 +453,7 @@ async function assertPeerServes({
     })
   }
   return {
-    pullsChunks: entriesOf(ENCRYPTED_COLLECTIONS_IDENTIFIER).length > 0
+    pullsChunks: entriesOf(ENCRYPTED_COLLECTIONS_SPEC_ID).length > 0
   }
 }
 

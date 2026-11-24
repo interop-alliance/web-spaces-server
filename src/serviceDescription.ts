@@ -23,7 +23,9 @@
  * entry's `serverDid`. The origin id and the server DID sit on the core entry
  * rather than on `instance` because a client may gate on them (a replication
  * peer on the origin id, a controller delegating a pull capability on the
- * DID), and the spec forbids a client gating on `instance`.
+ * DID), and the spec forbids a client gating on `instance`. The `specs` keys
+ * are the `*_SPEC_ID` identifiers `@interop/storage-core` exports. They are
+ * provisional until the `pws` namespace is registered.
  */
 import { createHash } from 'node:crypto'
 import type {
@@ -32,26 +34,28 @@ import type {
   FastifyReply,
   FastifyRequest
 } from 'fastify'
+import {
+  AUTHZ_PROFILE_SPEC_ID,
+  CLIENT_ANNEX_SPEC_ID,
+  ENCRYPTED_COLLECTIONS_SPEC_ID,
+  PWS_SPEC_ID,
+  REPLICATION_SPEC_ID,
+  WALLET_PROFILE_SPEC_ID
+} from '@interop/storage-core'
 
 import {
-  AUTHZ_PROFILE_IDENTIFIER,
   AUTHZ_PROFILE_URL,
   AUTHZ_PROFILE_VERSION,
-  CLIENT_ANNEX_IDENTIFIER,
   CLIENT_ANNEX_VERSION,
-  ENCRYPTED_COLLECTIONS_IDENTIFIER,
   ENCRYPTED_COLLECTIONS_URL,
   ENCRYPTED_COLLECTIONS_VERSION,
   PACKAGE_INSTANCE,
-  REPLICATION_IDENTIFIER,
   REPLICATION_URL,
   REPLICATION_VERSION,
   SERVER_VERSION,
   SERVICE_DESCRIPTION_MAX_AGE,
   SERVICE_LINK_RELATION,
-  SPEC_IDENTIFIER,
   SPEC_VERSION,
-  WALLET_PROFILE_IDENTIFIER,
   WALLET_PROFILE_URL,
   WALLET_PROFILE_VERSION
 } from './config.default.js'
@@ -160,7 +164,7 @@ function assertServed<Token extends string>({
   const missing = required.filter(token => !served.includes(token))
   if (missing.length > 0) {
     throw new Error(
-      `The ${WALLET_PROFILE_IDENTIFIER} entry requires ${identifier} ` +
+      `The ${WALLET_PROFILE_SPEC_ID} entry requires ${identifier} ` +
         `tokens this server does not serve: ${missing.join(', ')}`
     )
   }
@@ -173,7 +177,7 @@ function assertServed<Token extends string>({
 // one is missing. A profile version that pins other versions or another token
 // set is a new pair of calls.
 assertServed({
-  identifier: SPEC_IDENTIFIER,
+  identifier: PWS_SPEC_ID,
   served: SERVICE_FEATURES,
   required: [
     'listing',
@@ -186,7 +190,7 @@ assertServed({
   ]
 })
 assertServed({
-  identifier: ENCRYPTED_COLLECTIONS_IDENTIFIER,
+  identifier: ENCRYPTED_COLLECTIONS_SPEC_ID,
   served: ENCRYPTED_COLLECTIONS_FEATURES,
   required: ['blinded-index-query', 'governed-history-logs']
 })
@@ -229,7 +233,7 @@ function buildServiceDescription({
   return {
     url: serviceDescriptionUrl(serverUrl),
     specs: {
-      [SPEC_IDENTIFIER]: [
+      [PWS_SPEC_ID]: [
         {
           version: SPEC_VERSION,
           spaces: absoluteUrl({ path: spacesPath(), serverUrl }),
@@ -243,7 +247,7 @@ function buildServiceDescription({
           })
         } satisfies PwsVersionEntry
       ],
-      [AUTHZ_PROFILE_IDENTIFIER]: [
+      [AUTHZ_PROFILE_SPEC_ID]: [
         {
           version: AUTHZ_PROFILE_VERSION,
           url: AUTHZ_PROFILE_URL,
@@ -252,7 +256,7 @@ function buildServiceDescription({
           features: [...AUTHZ_PROFILE_FEATURES]
         } satisfies AuthzProfileVersionEntry
       ],
-      [ENCRYPTED_COLLECTIONS_IDENTIFIER]: [
+      [ENCRYPTED_COLLECTIONS_SPEC_ID]: [
         {
           version: ENCRYPTED_COLLECTIONS_VERSION,
           url: ENCRYPTED_COLLECTIONS_URL,
@@ -261,14 +265,14 @@ function buildServiceDescription({
       ],
       // A conformance claim with nothing further to advertise, so the entry
       // carries `version` alone.
-      [CLIENT_ANNEX_IDENTIFIER]: [
+      [CLIENT_ANNEX_SPEC_ID]: [
         {
           version: CLIENT_ANNEX_VERSION
         } satisfies ServiceDescriptionVersionEntry
       ],
       // Listing the entry is the claim that replication is served. A peer's
       // registration check reads it, beside `originId` on the core entry.
-      [REPLICATION_IDENTIFIER]: [
+      [REPLICATION_SPEC_ID]: [
         {
           version: REPLICATION_VERSION,
           url: REPLICATION_URL
@@ -277,7 +281,7 @@ function buildServiceDescription({
       // A conformance claim over the core and Encrypted Collections entries,
       // checked above when the module loads. The profile admits `version` and
       // `url` only; a client treats an entry with any other member as absent.
-      [WALLET_PROFILE_IDENTIFIER]: [
+      [WALLET_PROFILE_SPEC_ID]: [
         {
           version: WALLET_PROFILE_VERSION,
           url: WALLET_PROFILE_URL

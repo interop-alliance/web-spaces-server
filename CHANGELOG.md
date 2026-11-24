@@ -1,5 +1,13 @@
 # History
 
+## 0.47.1 - TBD
+
+### Changed
+
+- The service description's spec identifiers are imported from
+  `@interop/storage-core` (0.47.0) in place of local constants. The served
+  document is unchanged.
+
 ## 0.47.0 - 2026-11-23
 
 ### Added

@@ -7852,3 +7852,38 @@ pre-pass checks the root only when the DID's document is stored or cached here.
 Whether such a DID may also be the Space controller is a separate decision.
 Related: the foreign `did:webvh` fetch bound (WSS-240) and the cross-host
 invoker research (WSS-162).
+
+### WSS-279: [L] (*) [after SC-15] Import the service description spec identifiers from storage-core
+
+- status: done
+- done: 2026-11-23
+- priority: low
+- backend: *
+- labels: service-description, refactor, dependencies
+- discovered-from: WSS-245 (2026-11-23)
+- blocked-by: SC-15
+- touches:
+  - web-spaces-server (this repo): `src/config.default.ts` (the `*_IDENTIFIER`
+    constants), `src/serviceDescription.ts`, `package.json` (the storage-core
+    range)
+  - storage-core: SC-15 adds the constants and the `features` member. Published
+    as 0.47.0, which package.json and the lockfile resolve from the npm registry
+  - pws-client: WCL-107 makes the same move there (filed there)
+- acceptance:
+  - [x] `src/serviceDescription.ts` imports `PWS_SPEC_ID`,
+        `AUTHZ_PROFILE_SPEC_ID`, `ENCRYPTED_COLLECTIONS_SPEC_ID`,
+        `CLIENT_ANNEX_SPEC_ID`, `REPLICATION_SPEC_ID` and
+        `WALLET_PROFILE_SPEC_ID` from `@interop/storage-core` in place of its
+        `*_IDENTIFIER` constants
+  - [x] The local `*_IDENTIFIER` constants are removed from
+        `src/config.default.ts`, and every other importer of them moves
+  - [x] The `& { features: string[] }` addition on the authorization profile
+        entry's `satisfies` clause is removed, since `AuthzProfileVersionEntry`
+        carries `features`
+  - [x] The service description output is byte-identical to before, and the
+        existing service description tests pass unchanged
+
+Context: the server defines the service description identifiers itself, and
+widens the authorization profile entry type locally to carry the
+`did-url-targets` token. storage-core now owns both, so the copies go. Filed
+with WSS-245 so the cleanup is not lost. It changes no wire output.
