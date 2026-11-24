@@ -1,6 +1,6 @@
 # History
 
-## 0.47.1 - TBD
+## 0.47.2 - TBD
 
 ### Changed
 
