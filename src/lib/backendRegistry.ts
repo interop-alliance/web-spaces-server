@@ -16,7 +16,9 @@
  * backend record from the control plane and builds -- memoized -- the
  * provider adapter
  * from the injected `backendProviders` registry; with no factory for the record's
- * `provider` it fails closed with `unsupported-backend` (409). Memoization
+ * `provider` it fails closed with `unsupported-backend` (409), as it does for an
+ * adapter that does not enforce a capability caveat type the server
+ * advertises. Memoization
  * mirrors spaceContext.ts: one `LruCache` per registry (a `WeakMap`), so adapter
  * instances are reused across requests and a registry's adapters are GC'd with
  * it.
@@ -25,6 +27,7 @@ import type { FastifyRequest } from 'fastify'
 import { LruCache } from '@interop/lru-memoize'
 import { UnsupportedBackendError } from '../errors.js'
 import { RESOLVED_BACKEND_CACHE_MAX } from '../config.default.js'
+import { unenforcedCaveatTypes } from './ownResourcesOnly.js'
 import type {
   BackendProviderRegistry,
   CollectionMetadata,
@@ -118,10 +121,22 @@ export async function resolveBackend({
       // primary backend), NOT `request.log`: the adapter is memoized and reused
       // across requests, so capturing the first request's per-request child
       // logger would mis-tag every later log line with that first request's id.
-      return factory(record, {
+      const adapter = factory(record, {
         logger: request.server.log,
         originId: storage.originId
       })
+      // The startup rule for a server backend, applied to an adapter: one
+      // that does not enforce an advertised caveat type is not served.
+      const missing = unenforcedCaveatTypes(adapter)
+      if (missing.length > 0) {
+        throw new UnsupportedBackendError({
+          backendId,
+          detail:
+            `Backend '${backendId}' does not enforce the capability caveat ` +
+            `${missing.join(', ')}.`
+        })
+      }
+      return adapter
     }
   })
 }

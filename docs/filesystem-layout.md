@@ -270,6 +270,20 @@ A read takes no lock, so one that lands between the two steps can find neither
 name. It then reads the id as absent, which every reader treats as it treats a
 tombstone.
 
+A representation file's name carries nothing of the write that made it. A read
+therefore reads the sidecar again after it opens the file. If the generation or
+the write stamp changed, it discards what it opened and follows the newer
+sidecar. This catches a delete and a create of the id between the first sidecar
+read and the open.
+
+It does not catch a replicated apply over a live record. The apply renames the
+new bytes into place before it writes the sidecar. A read in that gap returns
+the new bytes beside the prior sidecar, with its `createdBy`. Under the
+`OwnResourcesOnly` caveat, a grant that reaches the prior record can then read
+the new bytes even when the new record has a different `createdBy`. This is
+reachable only on a replica server, when the id was deleted and created again by
+another principal on the source server. This limitation is accepted.
+
 ### Counting live Resources
 
 The Collection listing's `totalItems` counts the ids that have both a live
@@ -362,6 +376,15 @@ parent revision. The window is the two renames and one sidecar write, and the
 Postgres swap, one transaction, has none. A write of the Resource that meets a
 swap a fault cut short between the two steps finishes the swap first, under the
 same lock, so the chunk directory it reads is the settled one.
+
+The window has a consequence for the `OwnResourcesOnly` caveat. Get Chunk and
+List Chunks decide a caveated read from the parent's `createdBy`. In the window,
+a caveated grant that reaches the prior parent can read chunks of the new set,
+even when the new parent revision has a different `createdBy`. This is reachable
+only on a replica server. A replica registration applies a chunked Resource
+whose creator changed on the source server, after a delete and re-create there
+by another principal. A fault between the two steps holds the window open until
+the next write, apply or boot settles the swap. This limitation is accepted.
 
 Every step can be run again over what a cut-short run left, so the same code
 serves the apply and the finish of a torn swap.

@@ -452,6 +452,23 @@ async function openFileStream(
 }
 
 /**
+ * Whether two sidecars of one id record the same content write: the same
+ * generation and the same write stamp. The members are compared as stored,
+ * so two sidecars that both lack one still match.
+ * @param left {MetaSidecar}
+ * @param right {MetaSidecar}
+ * @returns {boolean}
+ */
+function sameContentWrite(left: MetaSidecar, right: MetaSidecar): boolean {
+  return (
+    left.generation === right.generation &&
+    left.updatedAt === right.updatedAt &&
+    left.updatedAtCounter === right.updatedAtCounter &&
+    left.originId === right.originId
+  )
+}
+
+/**
  * The epoch as an `updatedAt` value: the time of a stand-in stamp that sorts
  * below every stamp a clock mints.
  */
@@ -6008,6 +6025,15 @@ export class FileSystemBackend implements StorageBackend {
    * which it does in no fixed order, so the Resource is absent. Otherwise no
    * committed write leaves that state behind, so it is a `StorageError`
    * (500), as is a live sidecar with no usable `fileName` (`#namedFilePath`).
+   *
+   * A file name carries nothing of the write that made it, so an open can
+   * also succeed on a file a later write put under the same name: a delete
+   * and a create of the id with the same content-type. After a successful
+   * open the sidecar is therefore read again. One that still carries the
+   * generation and write stamp of the first read names the opened file, and
+   * the pair is returned. Otherwise what was opened is discarded and the
+   * newer sidecar is followed, within the same three attempts. A record that
+   * keeps changing through all of them is a `StorageError` (500).
    * @param options {object}
    * @param options.collectionDir {string}   the dir the representation lives in
    *   (a Collection dir, or a chunk dir for a chunk)
@@ -6016,6 +6042,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param [options.requestName] {string}   used in the error title
    * @param options.open {(filePath: string) => Promise<T>}   opens the located
    *   file; an `ENOENT` it rejects with is handled here
+   * @param [options.discard] {(opened: T) => void}   releases what `open`
+   *   resolved when the sidecar changed under it
    * @param options.stillStands {() => Promise<boolean>}   whether the
    *   container (the Collection, and for a chunk its parent Resource) still
    *   stands, asked only once a file is found missing
@@ -6026,12 +6054,14 @@ export class FileSystemBackend implements StorageBackend {
     resourceId,
     requestName,
     open,
+    discard,
     stillStands
   }: {
     collectionDir: string
     resourceId: string
     requestName?: string
     open: (filePath: string) => Promise<T>
+    discard?: (opened: T) => void
     stillStands: () => Promise<boolean>
   }): Promise<{ sidecar: MetaSidecar; opened: T } | undefined> {
     const maxAttempts = 3
@@ -6046,8 +6076,9 @@ export class FileSystemBackend implements StorageBackend {
         sidecar,
         requestName
       })
+      let opened: T
       try {
-        return { sidecar, opened: await open(filePath) }
+        opened = await open(filePath)
       } catch (err) {
         if (!isEnoent(err)) {
           throw new StorageError({ cause: err as Error, requestName })
@@ -6072,7 +6103,38 @@ export class FileSystemBackend implements StorageBackend {
           })
         }
         sidecar = reread
+        continue
       }
+      // The open succeeded. The sidecar is read again, since a delete and a
+      // create of the id may have put another write's file under this name.
+      let current: MetaSidecar | undefined
+      try {
+        current = await this.readMetaSidecar({ collectionDir, resourceId })
+      } catch (err) {
+        discard?.(opened)
+        throw err
+      }
+      if (
+        current !== undefined &&
+        current.deleted !== true &&
+        sameContentWrite(current, sidecar)
+      ) {
+        return { sidecar, opened }
+      }
+      discard?.(opened)
+      if (current === undefined || current.deleted === true) {
+        return undefined
+      }
+      if (attempt >= maxAttempts) {
+        throw new StorageError({
+          cause: new Error(
+            `The record of "${resourceId}" changed under each of ` +
+              `${maxAttempts} reads.`
+          ),
+          requestName
+        })
+      }
+      sidecar = current
     }
   }
 
@@ -6161,6 +6223,7 @@ export class FileSystemBackend implements StorageBackend {
       resourceId,
       requestName,
       open: filePath => openFileStream(filePath, this.logger),
+      discard: resourceStream => resourceStream.destroy(),
       stillStands
     })
     if (!located) {

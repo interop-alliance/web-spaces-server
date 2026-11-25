@@ -513,6 +513,29 @@ function describeOwnResources({
         )
       })
 
+      it('refuses an id in an absent Collection, and stays a no-op with no principals', async () => {
+        const collectionId = `absent-${crypto.randomUUID()}`
+        await assertNotOwn(
+          backend.deleteResource({
+            spaceId,
+            collectionId,
+            resourceId: 'never',
+            ownedBy: [ALICE]
+          })
+        )
+        await backend.deleteResource({
+          spaceId,
+          collectionId,
+          resourceId: 'never',
+          ownedBy: []
+        })
+        await backend.deleteResource({
+          spaceId,
+          collectionId,
+          resourceId: 'never'
+        })
+      })
+
       it("refuses an absent id and another party's tombstone", async () => {
         const collectionId = await freshCollection()
         await assert.rejects(

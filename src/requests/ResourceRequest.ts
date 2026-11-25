@@ -301,18 +301,27 @@ export class ResourceRequest {
     })
 
     // A conditional read (spec "Caching") consults the Metadata first and
-    // answers 304 without opening the byte stream.
+    // answers 304 without opening the byte stream. Under an
+    // `OwnResourcesOnly` caveat the Metadata the 304 is answered from must be
+    // the principals' own, so it is checked before the condition is.
     const notModified = await notModifiedBeforeStream({
       request,
       reply,
-      readMetadata: () =>
-        getResourceMetadataOrThrow({
+      readMetadata: async () => {
+        const metadata = await getResourceMetadataOrThrow({
           dataBackend,
           spaceId,
           collectionId,
           resourceId,
           requestName
         })
+        assertOwnReadServed({
+          ownRead,
+          createdBy: metadata.createdBy,
+          requestName
+        })
+        return metadata
+      }
     })
     if (notModified) {
       return reply

@@ -264,12 +264,14 @@ export class ChunkRequest {
 
     // A conditional read (spec "Caching") consults the chunk's metadata first
     // (through the same parent-Resource gate as Head Chunk) and answers 304
-    // without opening the byte stream.
+    // without opening the byte stream. Under an `OwnResourcesOnly` caveat
+    // the parent Resource is confirmed after the metadata read, before the
+    // condition is evaluated.
     const notModified = await notModifiedBeforeStream({
       request,
       reply,
-      readMetadata: () =>
-        readChunkMetadataOrThrow({
+      readMetadata: async () => {
+        const metadata = await readChunkMetadataOrThrow({
           dataBackend,
           spaceId,
           collectionId,
@@ -277,6 +279,9 @@ export class ChunkRequest {
           chunkIndex,
           requestName
         })
+        await confirmOwnRead()
+        return metadata
+      }
     })
     if (notModified) {
       return reply

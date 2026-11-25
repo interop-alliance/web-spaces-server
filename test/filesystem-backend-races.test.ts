@@ -23,7 +23,7 @@ import { chunkDirName } from '@interop/space-archive'
 
 import { FileSystemBackend } from '../src/backends/filesystem.js'
 import type { TempFileSystemBackend } from '../src/testing.js'
-import { formatEtag } from '../src/lib/etag.js'
+import { etagOf, formatEtag } from '../src/lib/etag.js'
 import {
   ResourceImmutableError,
   ResourceNotFoundError,
@@ -591,6 +591,69 @@ describe('FileSystemBackend races', () => {
       return sidecar
     })
   }
+
+  it('a read that races a delete and a create of the id serves the new record whole', async () => {
+    // The file name carries nothing of the write that made it, so the open
+    // succeeds on the file the create wrote. The read's second look at the
+    // sidecar finds another write's stamp and follows it, so the bytes and
+    // the `createdBy` served are one record's.
+    await backend.writeResource({
+      spaceId,
+      collectionId,
+      resourceId: 'swapped',
+      input: { kind: 'json', contentType: 'application/json', data: { a: 1 } },
+      createdBy: ['did:key:z6MkFirst']
+    })
+    const collectionDir = path.join(
+      backend.dataDir,
+      'spaces',
+      spaceId,
+      collectionId
+    )
+    raceAfterSidecarRead({
+      dir: collectionDir,
+      id: 'swapped',
+      race: async () => {
+        await backend.deleteResource({
+          spaceId,
+          collectionId,
+          resourceId: 'swapped'
+        })
+        await backend.writeResource({
+          spaceId,
+          collectionId,
+          resourceId: 'swapped',
+          input: {
+            kind: 'json',
+            contentType: 'application/json',
+            data: { b: 2 }
+          },
+          createdBy: ['did:key:z6MkSecond']
+        })
+      }
+    })
+    const result = await backend.getResource({
+      spaceId,
+      collectionId,
+      resourceId: 'swapped'
+    })
+    vi.restoreAllMocks()
+    const chunks: Buffer[] = []
+    for await (const chunk of result.resourceStream) {
+      chunks.push(chunk as Buffer)
+    }
+    assert.deepStrictEqual(JSON.parse(Buffer.concat(chunks).toString()), {
+      b: 2
+    })
+    assert.deepStrictEqual(result.createdBy, ['did:key:z6MkSecond'])
+    const stored = await backend.getResourceMetadata({
+      spaceId,
+      collectionId,
+      resourceId: 'swapped'
+    })
+    assert.ok(stored)
+    assert.equal(etagOf(result), etagOf(stored))
+  })
 
   it('a read that races Delete Collection resolves 404 while a member sidecar is left', async () => {
     // Delete Collection writes its tombstone, then removes the members in no

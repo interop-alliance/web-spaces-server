@@ -387,7 +387,12 @@ record too (`assertOwnReadServed`). Get Resource checks the `createdBy` that
 `getResource` returns beside the stream. Head Resource and the `meta` read check
 the Metadata they serve. A chunk read and the chunk listing read the parent's
 Metadata again after the served read, and require the same `createdAt` and an
-owned `createdBy` (`assertOwnReadOfParentServed`).
+owned `createdBy` (`assertOwnReadOfParentServed`). On a replica server the
+filesystem backend's chunk swap leaves a short window in which that check meets
+the prior parent beside chunks of the new set. A replicated apply over a live
+Resource leaves a similar window, in which Get Resource returns the new bytes
+beside the prior `createdBy`. Both accepted limitations are described in
+[filesystem-layout.md](filesystem-layout.md).
 
 The Collection listing passes `ownedBy` to the backend. The listing holds only
 the principals' own Resources, and `totalItems` counts only those. A listing
