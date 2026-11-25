@@ -254,6 +254,18 @@ mints a random id.
   every later write. A create over a tombstone records a new one, so the handler
   checks the `createdBy` of the record it serves, and not only the one it read
   to decide.
+- The filesystem backend renames a replicated chunked Resource's new chunk set
+  into place before it writes the new parent sidecar. In that window a caveated
+  chunk read can reach chunks of the new set under the prior parent's
+  `createdBy`. It is reachable only on a replica server, when the creator
+  changed on the source server. This is accepted. See
+  [filesystem-layout.md](../docs/filesystem-layout.md).
+- The filesystem backend's replicated apply over a live Resource renames the new
+  bytes into place before it writes the sidecar. In that window a caveated Get
+  Resource can return the new bytes under the prior record's `createdBy`. It is
+  reachable only on a replica server, when the creator changed on the source
+  server. This is accepted. See
+  [filesystem-layout.md](../docs/filesystem-layout.md).
 - A chain with an unknown caveat type is refused on every route family, the
   `/kms` routes included.
 - A deployment on an older verifier cannot enforce the caveat. It advertises no

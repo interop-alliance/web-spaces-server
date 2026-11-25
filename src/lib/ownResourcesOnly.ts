@@ -17,7 +17,7 @@ import type { CapabilityCaveat, CaveatHandler } from '@interop/zcap'
 import { delegationChainDids, verifiableDidOf } from '../auth-header-hooks.js'
 import { asList } from './chainCapability.js'
 import { NotOwnResourceError, UnauthorizedError } from '../errors.js'
-import type { IDID } from '../types.js'
+import type { IDID, StorageBackend } from '../types.js'
 
 /**
  * The caveat `type` this module enforces.
@@ -29,6 +29,23 @@ export const OWN_RESOURCES_ONLY = 'OwnResourcesOnly'
  * them. A chain carrying any other type is refused by the verifier.
  */
 export const SUPPORTED_CAVEAT_TYPES = [OWN_RESOURCES_ONLY]
+
+/**
+ * The caveat types the server advertises that a backend does not enforce.
+ * A write, a delete and a listing under a capability caveat are decided by
+ * the backend, so one that leaves a type out would serve such a grant as if
+ * it carried no caveat. Empty for a backend that may be served.
+ *
+ * @param backend {Pick<StorageBackend, 'enforcedCaveats'>}
+ * @returns {string[]}
+ */
+export function unenforcedCaveatTypes(
+  backend: Pick<StorageBackend, 'enforcedCaveats'>
+): string[] {
+  return SUPPORTED_CAVEAT_TYPES.filter(
+    type => !backend.enforcedCaveats?.includes(type)
+  )
+}
 
 /**
  * How a route answers a chain that carries `OwnResourcesOnly`.

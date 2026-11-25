@@ -3631,6 +3631,9 @@ export class PostgresBackend implements StorageBackend {
         collectionId
       })
       if (feedPosition === undefined) {
+        // Under `OwnResourcesOnly` principals an absent id is refused, in
+        // an absent Collection as in a live one.
+        assertOwnsResource({ ownedBy, createdBy: undefined })
         return
       }
       // Narrow projection: the lock needs the row, not the `content` bytea

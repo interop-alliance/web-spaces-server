@@ -29,14 +29,27 @@ describe('Per-Collection backend resolver (selectable registered backends)', () 
     providerBackend: TempFileSystemBackend,
     baseServerUrl: string,
     alice: any
+  // How many adapters the `no-caveat-provider` factory has built.
+  let noCaveatAdapters = 0
 
   beforeAll(async () => {
     defaultBackend = await openTempBackend({ prefix: 'was-test-default-' })
     providerBackend = await openTempBackend({ prefix: 'was-test-provider-' })
     // A fake `test-provider` whose adapter is a second filesystem backend over
     // its own dir, so a Resource routed to it lands there, not in the default dir.
+    // `no-caveat-provider` builds an adapter written before capability
+    // caveats, which enforces none.
     const providers: BackendProviderRegistry = new Map([
-      ['test-provider', () => providerBackend]
+      ['test-provider', () => providerBackend],
+      [
+        'no-caveat-provider',
+        () => {
+          noCaveatAdapters += 1
+          return Object.create(providerBackend, {
+            enforcedCaveats: { value: [] }
+          })
+        }
+      ]
     ])
     ;({ fastify, baseServerUrl } = await startTestServer({
       backend: defaultBackend,
@@ -197,6 +210,38 @@ describe('Per-Collection backend resolver (selectable registered backends)', () 
     }
     assert.ok(thrown, 'expected the data-plane write to fail closed')
     assert.equal(thrown.response.status, 409)
+  })
+
+  it('an adapter that does not enforce an advertised caveat fails closed (409) at data-plane', async () => {
+    const spaceId = await freshSpace('No Caveat Adapter Space')
+    await registerBackend(spaceId, 'no-caveat-1', 'no-caveat-provider')
+    const collectionId = 'docs'
+    const createCol = await alice.pws.request({
+      url: url(`/space/${spaceId}/${collectionId}/meta`),
+      method: 'PUT',
+      json: { id: collectionId, backend: { id: 'no-caveat-1' } }
+    })
+    assert.equal(createCol.status, 201)
+
+    // The controller's own root invocation carries no caveat and is refused
+    // all the same: the adapter is never served.
+    for (const method of ['PUT', 'GET']) {
+      const refused = await requestError(
+        alice.pws.request({
+          url: url(`/space/${spaceId}/${collectionId}/r1`),
+          method,
+          ...(method === 'PUT' && { json: { x: 1 } })
+        })
+      )
+      assert.equal(refused.response.status, 409, method)
+      assert.match(refused.data.type, /#unsupported-backend/)
+      assert.match(
+        refused.data.errors[0].detail,
+        /capability caveat OwnResourcesOnly/
+      )
+    }
+    // A refused adapter is not memoized: each request built its own.
+    assert.equal(noCaveatAdapters, 2)
   })
 
   it('selecting an unknown backend id is rejected at Collection write (409 unsupported-backend)', async () => {

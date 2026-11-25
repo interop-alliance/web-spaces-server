@@ -38,7 +38,7 @@ import {
 } from './config.default.js'
 import { defaultBackend as openFallbackBackend } from './storage.js'
 import { ServerBackends } from './lib/serverBackends.js'
-import { SUPPORTED_CAVEAT_TYPES } from './lib/ownResourcesOnly.js'
+import { unenforcedCaveatTypes } from './lib/ownResourcesOnly.js'
 import { bufferedBodyLimit } from './lib/bodyLimit.js'
 import { onboardingTokenAuthorizer } from './provisioning.js'
 import {
@@ -433,9 +433,7 @@ async function wasPlugin(
   // the backend. One that does not enforce a caveat type `/service`
   // advertises would serve such a grant as if it carried no caveat.
   for (const backend of opened) {
-    const missing = SUPPORTED_CAVEAT_TYPES.filter(
-      type => !backend.enforcedCaveats?.includes(type)
-    )
+    const missing = unenforcedCaveatTypes(backend)
     if (missing.length > 0) {
       throw new Error(
         `The storage backend "${backend.describe().id}" does not enforce ` +

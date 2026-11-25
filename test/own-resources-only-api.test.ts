@@ -373,13 +373,22 @@ describe('OwnResourcesOnly caveat', () => {
 
   describe('an unknown caveat type', () => {
     it('is refused as the masked not-found on a Space route', async () => {
+      // Guest A creates the fixture, so a grant with OwnResourcesOnly alone
+      // reads it and only the unknown caveat can explain a refusal.
       const seeded = await call({
-        who: alice,
+        who: guestA,
         url: resourceUrl('unknown-caveat-doc'),
         method: 'PUT',
+        capability: guestAPlain,
         json: { hello: 'world' }
       })
       assert.equal(seeded.status, 201)
+      const knownOnly = await call({
+        who: guestA,
+        url: resourceUrl('unknown-caveat-doc'),
+        capability: guestAGrant
+      })
+      assert.equal(knownOnly.status, 200)
       const baseline = await call({
         who: guestA,
         url: resourceUrl('unknown-caveat-doc'),
@@ -997,13 +1006,14 @@ describe('OwnResourcesOnly caveat', () => {
 
     it('guest B does not match what the second app created', async () => {
       const url = resourceUrl(`app-only-${randomUUID()}`)
-      await call({
+      const created = await call({
         who: guestA2,
         url,
         method: 'PUT',
         capability: guestA2Grant,
         json: { text: 'from the second app' }
       })
+      assert.equal(created.status, 201)
       assertMasked(
         await call({ who: guestB, url, capability: guestBGrant }),
         'guest B GET'
@@ -1364,10 +1374,19 @@ describe('OwnResourcesOnly caveat', () => {
         (await call({ who: guestA, url: own, capability: spaceCaveat })).status,
         200
       )
+      const foreign = resourceUrl(`by-controller-${randomUUID()}`)
+      const seeded = await call({
+        who: alice,
+        url: foreign,
+        method: 'PUT',
+        json: { text: 'controller' }
+      })
+      assert.equal(seeded.status, 201)
+      assert.equal((await call({ who: alice, url: foreign })).status, 200)
       assertMasked(
         await call({
           who: guestA,
-          url: resourceUrl('victim-by-controller'),
+          url: foreign,
           capability: spaceCaveat
         }),
         'Space-URL caveat grant on the controller Resource'
@@ -1878,10 +1897,24 @@ describe('OwnResourcesOnly caveat', () => {
       assert.equal(read.status, 200)
       // The principal is the second app, so guest A's own Resource is not
       // its own.
+      const foreign = resourceUrl(`by-guest-a-${randomUUID()}`)
+      const seeded = await call({
+        who: guestA,
+        url: foreign,
+        method: 'PUT',
+        capability: guestAGrant,
+        json: { text: 'guest A' }
+      })
+      assert.equal(seeded.status, 201)
+      assert.equal(
+        (await call({ who: guestA, url: foreign, capability: guestAGrant }))
+          .status,
+        200
+      )
       assertMasked(
         await call({
           who: guestA2,
-          url: resourceUrl('victim-by-guest-a'),
+          url: foreign,
           capability: child
         }),
         'mixed chain on a Resource guest A created'
