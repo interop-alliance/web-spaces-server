@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 282
+nextAvailableId: 283
 
 <!-- roadmap-order:index:start -->
 
@@ -14,6 +14,8 @@ item others wait on with its dependents beneath it.
 
 Ready:
 
+- WSS-282 [H] (*) A generation delegation can delete and re-create
+  `key-map/user-key.jsonl`
 - WSS-266 [H] (*) Pin what a container-scoped grant reaches at a `policy` URL
 
 **Correctness and consistency**
@@ -142,7 +144,6 @@ Ready:
 
 Ready:
 
-- WSS-46 [H] (pg) Un-skip the Postgres and flag-gated storage-contract tests
 - WSS-267 [H] (*) Clause and container-rule refusal tests reach the check they
   name
 - WSS-47 [M] (*) Cover `start.ts` and the untested config parsers
@@ -313,6 +314,50 @@ entries that name archived items, which can be removed.
 An authorization or integrity bound that is weaker than ARCHITECTURE.md or the
 spec claims: a grant that reaches more than it should, an input the server
 trusts without checking, or a configuration that fails open.
+
+### WSS-282: [H] (*) A generation delegation can delete and re-create `key-map/user-key.jsonl`
+
+- status: todo
+- priority: high
+- backend: *
+- labels: zcap, authorization, client-annex, resource-log
+- discovered-from: wallet-core WC-322 (2026-11-24), reproduced against this
+  server by wallet-core's `test/integration/keys-rosterRecreate.test.ts`
+- touches:
+  - web-spaces-server (this repo): `src/requests/ResourceRequest.ts`,
+    `src/lib/clientAnnexClause.ts`, docs/client-annex-clause.md
+  - portable-web-spaces-spec: only if the answer is a declared append-only
+    Resource and not a rule keyed on the Resource id
+  - wallet-core: flip the server half of `keys-rosterRecreate.test.ts`
+- acceptance:
+  - [ ] How the server recognizes the Resource is decided with the user: by
+        id, as `did.jsonl` is today, or by a declaration on the Collection
+  - [ ] A `DELETE` of that Resource under a delegated chain whose tail is a
+        client-annex generation delegation is refused
+  - [ ] A `PUT` whose body the stored bytes are not a prefix of is refused,
+        as the governing history log's fast-forward rule refuses it
+  - [ ] A guarded create after a delete does not succeed for that chain
+  - [ ] A test pins each refusal, and the ordinary append still passes
+
+A wallet's generation delegation targets the Space URL with `GET`, `POST`,
+`PUT` and `DELETE`. The client-annex clause bounds a transient verification
+method only at the Space URL itself. A Resource `DELETE` passes, the tombstone
+reads as absent, and a guarded create then answers 201. The delete and
+fast-forward protections are keyed on the Resource id `did.jsonl` alone.
+
+The wallet's user key roster is a hash-chained log stored as the ordinary
+Resource `key-map/user-key.jsonl`. A holder of one standing credential can
+delete it and create a new one whose first entry it signs. A reader with no
+chain-head pin accepts the new log and takes the substituted key. The
+wallet-core test shows one credential doing this to a visit on another.
+
+This item closes the delegated path. It does not replace the reader-side
+check wallet-core is adding (the account document commits to the roster log's
+SCID), since a host can swap the stored bytes with no request at all.
+
+A Collection's governing history log is not affected. `meta/log` serves no
+`DELETE`, Delete Collection is controller-only, and a write the stored log is
+not a prefix of answers 412. The same wallet-core test pins those three.
 
 ### WSS-266: [H] (*) Pin what a container-scoped grant reaches at a `policy` URL
 
@@ -2295,36 +2340,6 @@ testable normative statements matched against the conformance suite's tests,
 plus a survey of the server's own `test/` suite. Suite-side items land in
 `@interop/was-conformance-suite` (tracked here per convention); the `test/`
 items are in-repo.
-
-### WSS-46: [H] (pg) Un-skip the Postgres and flag-gated storage-contract tests
-
-- status: todo
-- priority: high
-- backend: pg
-- labels: tests, backend
-- discovered-from: test coverage analysis (2026-07-22)
-- acceptance:
-  - [ ] The `hardQuota`/`exactUsage`-only contract tests (concurrent hard-quota,
-        count-quota create serialization, count-bytes-once races) run against at
-        least one backend in a default `pnpm test-node` run
-  - [ ] The Postgres contract suite runs in CI (service container or equivalent)
-        instead of collapsing to a single skip
-  - [ ] When `WAS_TEST_DATABASE_URL` is unset the skip is loud about what was
-        not run
-  - [ ] The two mixed-backend suites (`test/mixed-backends-api.test.ts`,
-        `test/mixed-backends-replication.test.ts`) run in CI too
-
-The whole Postgres storage-contract suite is gated on `WAS_TEST_DATABASE_URL`
-and silently collapses to one `it.skip` in a normal run. Worse, the contract
-tests that only run when a backend advertises `hardQuota`/`exactUsage` then run
-against _no_ backend at all, since the filesystem harness sets both flags false
--- the race-condition tests the flags exist for are dormant by default.
-
-The test suite audit of 2026-11-12 measured it: `src/backends/postgres.ts` is at
-1% line coverage and 34 tests skip, since `.github/workflows/ci.yml` has no
-Postgres service. The two mixed-backend suites skip with it, which leaves
-`src/lib/backendMirror.ts` at 58%, `src/lib/exportArchive.ts` at 56% and
-`src/lib/importAcrossBackends.ts` at 68%.
 
 ### WSS-267: [H] (*) Clause and container-rule refusal tests reach the check they name
 

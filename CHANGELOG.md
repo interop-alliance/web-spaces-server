@@ -1,5 +1,15 @@
 # History
 
+## 0.47.3 - TBD
+
+### Changed
+
+- CI runs the Postgres backend suites, the mixed-backend suites and the
+  hard-quota and exact-usage storage-contract tests against a Postgres service
+  container.
+- A test run without `WAS_TEST_DATABASE_URL` prints a warning, before and after
+  the tests, naming the suites it skipped.
+
 ## 0.47.2 - 2026-11-24
 
 ### Changed

@@ -7922,3 +7922,39 @@ Two ways to decide without the lock: a read of the local Collection record
 before the call, or the stamps of the tombstones already applied kept in the
 registration's loop state. WSS-196 bounds what tombstones cost a request. This
 item is the pull loop's share of the same growth.
+
+### WSS-46: [H] (pg) Un-skip the Postgres and flag-gated storage-contract tests
+
+- status: done
+- done: 2026-11-24
+- priority: high
+- backend: pg
+- labels: tests, backend
+- discovered-from: test coverage analysis (2026-07-22)
+- acceptance:
+  - [x] The `hardQuota`/`exactUsage`-only contract tests (concurrent hard-quota,
+        count-quota create serialization, count-bytes-once races) run against
+        Postgres in CI and in `pnpm test:pg`
+  - [x] The Postgres contract suite runs in CI (service container or equivalent)
+        instead of collapsing to a single skip
+  - [x] When `WAS_TEST_DATABASE_URL` is unset the skip is loud about what was
+        not run
+  - [x] The two mixed-backend suites (`test/mixed-backends-api.test.ts`,
+        `test/mixed-backends-replication.test.ts`) run in CI too
+
+The whole Postgres storage-contract suite is gated on `WAS_TEST_DATABASE_URL`
+and silently collapses to one `it.skip` in a normal run. Worse, the contract
+tests that only run when a backend advertises `hardQuota`/`exactUsage` then run
+against _no_ backend at all, since the filesystem harness sets both flags false
+-- the race-condition tests the flags exist for are dormant by default.
+
+The test suite audit of 2026-11-12 measured it: `src/backends/postgres.ts` is at
+1% line coverage and 34 tests skip, since `.github/workflows/ci.yml` has no
+Postgres service. The two mixed-backend suites skip with it, which leaves
+`src/lib/backendMirror.ts` at 58%, `src/lib/exportArchive.ts` at 56% and
+`src/lib/importAcrossBackends.ts` at 68%.
+
+The first acceptance box first asked for a default `pnpm test-node` run. It was
+reworded on 2026-11-24: the filesystem backend supports neither flag, and the
+races are only meaningful against real Postgres transactions, so a local run
+without the database relies on the warning instead.

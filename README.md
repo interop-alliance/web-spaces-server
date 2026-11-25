@@ -399,6 +399,12 @@ Each suite isolates itself in a throwaway `was_test_<hex>` schema, dropped on
 teardown, so parallel test workers never collide and the container stays
 reusable.
 
+A run without `WAS_TEST_DATABASE_URL` prints a warning before and after the
+tests that names the files it skipped. It also leaves out the storage-contract
+tests for the hard quota under concurrent writers and for exact usage
+accounting, since only the Postgres backend supports them. CI runs every suite
+against a Postgres service container.
+
 ### Conformance Tests
 
 Protocol conformance testing lives in its own package,
