@@ -1,6 +1,6 @@
 # Web Spaces Server Roadmap
 
-nextAvailableId: 283
+nextAvailableId: 285
 
 <!-- roadmap-order:index:start -->
 
@@ -63,6 +63,7 @@ Ready:
   hosted elsewhere
 - WSS-277 [M] (*) The spec text describes `createdBy` as the delegation chain
   list
+- WSS-283 [M] (*) Advertise the revocation endpoints in the service description
 - WSS-219 [L] (*) Changing a Collection's `backend.id` once it holds Resources
 - WSS-252 [L] (*) Point the Encrypted Collections entry's `url` at the published
   profile
@@ -139,6 +140,8 @@ Ready:
   costs one metadata read
 - WSS-199 [L] (*) Verify a peer invoker's delegation chain once
 - WSS-77 [L] (fs) Per-Collection filename cache on the filesystem backend
+- WSS-284 [L] (fs) A filtered Collection listing reads every sidecar on each
+  page
 
 **Docs, tests, and cleanup**
 
@@ -330,20 +333,20 @@ trusts without checking, or a configuration that fails open.
     Resource and not a rule keyed on the Resource id
   - wallet-core: flip the server half of `keys-rosterRecreate.test.ts`
 - acceptance:
-  - [ ] How the server recognizes the Resource is decided with the user: by
-        id, as `did.jsonl` is today, or by a declaration on the Collection
+  - [ ] How the server recognizes the Resource is decided with the user: by id,
+        as `did.jsonl` is today, or by a declaration on the Collection
   - [ ] A `DELETE` of that Resource under a delegated chain whose tail is a
         client-annex generation delegation is refused
-  - [ ] A `PUT` whose body the stored bytes are not a prefix of is refused,
-        as the governing history log's fast-forward rule refuses it
+  - [ ] A `PUT` whose body the stored bytes are not a prefix of is refused, as
+        the governing history log's fast-forward rule refuses it
   - [ ] A guarded create after a delete does not succeed for that chain
   - [ ] A test pins each refusal, and the ordinary append still passes
 
-A wallet's generation delegation targets the Space URL with `GET`, `POST`,
-`PUT` and `DELETE`. The client-annex clause bounds a transient verification
-method only at the Space URL itself. A Resource `DELETE` passes, the tombstone
-reads as absent, and a guarded create then answers 201. The delete and
-fast-forward protections are keyed on the Resource id `did.jsonl` alone.
+A wallet's generation delegation targets the Space URL with `GET`, `POST`, `PUT`
+and `DELETE`. The client-annex clause bounds a transient verification method
+only at the Space URL itself. A Resource `DELETE` passes, the tombstone reads as
+absent, and a guarded create then answers 201. The delete and fast-forward
+protections are keyed on the Resource id `did.jsonl` alone.
 
 The wallet's user key roster is a hash-chained log stored as the ordinary
 Resource `key-map/user-key.jsonl`. A holder of one standing credential can
@@ -351,9 +354,9 @@ delete it and create a new one whose first entry it signs. A reader with no
 chain-head pin accepts the new log and takes the substituted key. The
 wallet-core test shows one credential doing this to a visit on another.
 
-This item closes the delegated path. It does not replace the reader-side
-check wallet-core is adding (the account document commits to the roster log's
-SCID), since a host can swap the stored bytes with no request at all.
+This item closes the delegated path. It does not replace the reader-side check
+wallet-core is adding (the account document commits to the roster log's SCID),
+since a host can swap the stored bytes with no request at all.
 
 A Collection's governing history log is not affected. `meta/log` serves no
 `DELETE`, Delete Collection is controller-only, and a write the stored log is
@@ -997,6 +1000,51 @@ The server records and serves the list since WSS-264 (the delegation chain as
 `createdBy`). The spec still defines the member as one DID, the invoker of the
 creating write.
 
+### WSS-283: [M] (*) Advertise the revocation endpoints in the service description
+
+- status: todo
+- priority: medium
+- backend: *
+- labels: service-description, revocation, wire-contract
+- discovered-from: PWSCS-13 in pws-conformance-suite (2026-11-24), whose
+  revocation case had to build the URL by hand and guess from a 405 or 501
+  whether the endpoint exists
+- touches:
+  - portable-web-spaces-spec WASS-137 (filed 2026-11-24): the authorization
+    profile names the revocation endpoint only in a note, and defines no way to
+    advertise it
+  - pws-client WCL-186 (filed 2026-11-24): `space.revoke()` and the revocation
+    URL builder read the advertisement
+  - pws-conformance-suite PWSCS-41 (filed 2026-11-24):
+    `masked-denial.revocation-malformed-body` and the `denial-reasons-api`
+    revocation cases skip on the advertisement, in place of probing for a 404,
+    405 or 501
+- acceptance:
+  - [ ] The form of the advertisement is decided and signed off, as a new wire
+        artifact: which service description entry carries it, and under what
+        name
+  - [ ] The service description advertises the Space revocation endpoint
+        (`POST /space/{space_id}/zcaps/revocations/{revocation_id}`)
+  - [ ] It advertises the keystore revocation endpoint
+        (`POST /kms/keystores/{keystore_id}/zcaps/revocations/{revocation_id}`),
+        or the item records why the `/kms` facet is left out
+  - [ ] A test reads the advertisement from `GET /service` and submits a
+        revocation at the endpoint it names
+  - [ ] `docs/service-description.md` describes the advertisement
+
+The server accepts zcap revocations for a Space and for a keystore, and nothing
+in its service description says so. A client cannot tell a server that supports
+revocation from one that does not without sending a request and reading the
+refusal. The conformance suite does exactly that today, and treats a 404, 405 or
+501 as "not implemented". That reading is ambiguous, since a masked denial is
+also a 404.
+
+The authorization profile's entry already carries `signatureAlgorithms`,
+`zcapCryptosuites`, `zcapCaveats` and a `features` array, so it is the likely
+home. Whether the advertisement is a `features` token or a member of its own is
+part of the sign-off. The profile itself does not specify the endpoint yet, so
+the spec change may need to land first or alongside.
+
 ### WSS-219: [L] (*) Changing a Collection's `backend.id` once it holds Resources
 
 - status: todo
@@ -1399,7 +1447,7 @@ question for a replicated log (WSS-207).
 
 ### WSS-265: [M] (*) Capability caveats and the `OwnResourcesOnly` caveat
 
-- status: todo
+- status: in-progress
 - priority: medium
 - backend: *
 - labels: zcap, caveat, authorization, wire-contract, spec
@@ -1416,15 +1464,16 @@ question for a replicated log (WSS-207).
     fork has issues disabled, so nothing is filed there)
   - `@interop/http-signature-zcap-verify`: pass the understood caveat types
     through
-  - `@interop/storage-core`: the write and delete options that carry the
-    condition to a backend
+  - `@interop/storage-core`: the `zcapCaveats` member of the authorization
+    profile entry type. The write and delete options that carry the condition to
+    a backend are this repo's, on `StorageBackend`.
   - portable-web-spaces-spec: a caveats section in the zCap authorization
     profile, with the must-understand rule and the `OwnResourcesOnly` definition
   - pws-client: mint a grant that carries the caveat, and read the advertised
     caveat types before doing so
   - pws-conformance-suite: cases for the caveat and for an unknown caveat type
 - acceptance:
-  - [ ] Wire decisions recorded in `decisions/` and approved. Settled in the
+  - [x] Wire decisions recorded in `decisions/` and approved. Settled in the
         discussion are the `caveat` member of the zcap v1 context holding typed
         objects, and the type name `OwnResourcesOnly`. Settled (2026-11-20) are
         the service description member, a `zcapCaveats` array on the
@@ -1432,44 +1481,45 @@ question for a replicated log (WSS-207).
         suite rule. The member's presence claims the must-understand rule, and
         each value is a caveat `type` the server enforces. A capability that
         carries a caveat must be signed with `eddsa-jcs-2022`, and the other
-        links of its chain may use either suite. Not yet recorded in
-        `decisions/`.
-  - [ ] A chain with a caveat `type` the server does not understand is refused
+        links of its chain may use either suite. Recorded as decision 0008
+        (capability caveats and the `OwnResourcesOnly` caveat), accepted
+        2026-11-24.
+  - [x] A chain with a caveat `type` the server does not understand is refused
         on every route family, the `/kms` routes included, as the masked
         `not-found`
-  - [ ] Under a chain carrying `OwnResourcesOnly`, a request at the URL of an
+  - [x] Under a chain carrying `OwnResourcesOnly`, a request at the URL of an
         existing Resource, a `GET` and a `HEAD` included, succeeds only when the
         controller of the capability that carries the caveat appears in the
         Resource's `createdBy`
-  - [ ] A write or a delete is decided inside the write's critical section on
+  - [x] A write or a delete is decided inside the write's critical section on
         both backends
-  - [ ] A Collection listing under the chain lists only the Resources whose
+  - [x] A Collection listing under the chain lists only the Resources whose
         `createdBy` holds that controller, and its `totalItems` counts only
         those, on both backends
-  - [ ] The same check decides a request at the Resource's `meta` URL and at a
+  - [x] The same check decides a request at the Resource's `meta` URL and at a
         chunk URL beneath it
-  - [ ] A `GET` or `HEAD` that describes a container is unaffected by the
+  - [x] A `GET` or `HEAD` that describes a container is unaffected by the
         caveat. That covers the Collection Metadata and its governing history
         log, the Space Metadata, the Space listing, the `linkset` of either, the
         Collection's `backend` and the Space's `backends` listing.
-  - [ ] A revocation submission is unaffected
-  - [ ] A request at a `policy` URL under the chain is refused at every level,
+  - [x] A revocation submission is unaffected
+  - [x] A request at a `policy` URL under the chain is refused at every level,
         for every method
-  - [ ] Every other request under the chain is refused, a route decision 0008
+  - [x] Every other request under the chain is refused, a route decision 0008
         does not name included. That covers a query, the `changes` feed, the
         quota reports, the replicas routes, Export and Import Space, and every
         unsafe method at a container, Create Collection among them.
-  - [ ] A caveat on any link of the chain binds the invocation. When two links
+  - [x] A caveat on any link of the chain binds the invocation. When two links
         carry it, both must hold.
-  - [ ] A `POST` or a `PUT` that creates a Resource is unaffected, and so are a
+  - [x] A `POST` or a `PUT` that creates a Resource is unaffected, and so are a
         root invocation and a chain with no caveat
-  - [ ] A Resource with no `createdBy` is refused to a chain carrying the caveat
-  - [ ] A second app the same user delegated to, and a later visit of the same
+  - [x] A Resource with no `createdBy` is refused to a chain carrying the caveat
+  - [x] A second app the same user delegated to, and a later visit of the same
         app under a new key, can read, edit and delete what the first created
-  - [ ] Another guest holding the same kind of grant cannot, and a guest cannot
+  - [x] Another guest holding the same kind of grant cannot, and a guest cannot
         read or edit a Resource created by a party above the caveat's link
-  - [ ] The service description lists the caveat types the server understands
-  - [ ] The authorization profile entry lists the profile version that defines
+  - [x] The service description lists the caveat types the server understands
+  - [x] The authorization profile entry lists the profile version that defines
         caveats, which is a new version of the profile (settled 2026-11-20)
 
 The use case is a shared Collection, such as comments. A guest may add to it and
@@ -2331,6 +2381,26 @@ is the same shape as the Space Description and policy caches, with one more
 invalidation surface (any file write under the Collection). Surfaced by the
 2026-09-05 codebase simplification review; the Postgres backend has no
 equivalent cost (a primary-key lookup).
+
+### WSS-284: [L] (fs) A filtered Collection listing reads every sidecar on each page
+
+- status: todo
+- priority: low
+- backend: fs
+- labels: performance, zcap
+- discovered-from: code review of the `OwnResourcesOnly` caveat, 2026-11-24
+- acceptance:
+  - [ ] A page of a listing filtered by `ownedBy` does not open the sidecar of
+        every Resource in the Collection
+  - [ ] `totalItems` of the filtered listing still counts only the principals'
+        own Resources
+
+Context. Under an `OwnResourcesOnly` caveat the filesystem backend judges every
+live sidecar in the Collection before it pages, since the filtered `totalItems`
+needs the `createdBy` of each. A guest holding a caveat grant on a large shared
+Collection makes the server read every sidecar with each `?limit=1` request. The
+decision record for the caveat accepts this cost. A per-Collection cache of
+`createdBy` by Resource id, or a count kept per principal, would bound it.
 
 ## Docs, tests, and cleanup
 

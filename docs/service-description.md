@@ -55,8 +55,8 @@ here. See [validators-and-stamps.md](validators-and-stamps.md).
 ## The authorization profile entry
 
 The entry under `https://w3id.org/pws/authz-profile` names the zCap
-authorization profile version (`0.1`) and its rendered location. It carries the
-accepted `signatureAlgorithms` and `zcapCryptosuites` (profile
+authorization profile version (`0.2`) and its rendered location. It carries the
+accepted `signatureAlgorithms`, `zcapCryptosuites` and `zcapCaveats` (profile
 ["Service Description Entry"](https://w3c-ccg.github.io/portable-web-spaces-spec/authz-profile/#service-description-entry)).
 
 Listing the profile is how a client learns this server authorizes with
@@ -66,6 +66,14 @@ are read off `zcap.ts` (`INVOCATION_SIGNATURE_ALGORITHMS`,
 the advertisement too. `zcapCryptosuites` lists Data Integrity cryptosuite names
 only, so it names `eddsa-jcs-2022` alone. The legacy `Ed25519Signature2020`
 proof type is still accepted but not advertised.
+
+The entry carries `zcapCaveats: ['OwnResourcesOnly']`. Each value is a caveat
+`type` the server enforces, read off `SUPPORTED_CAVEAT_TYPES` in
+`lib/ownResourcesOnly.ts`. The member's presence claims the must-understand
+rule: a chain with a caveat type the server does not understand is refused. A
+client reads the member before it mints a grant with a caveat, since a server
+without it may ignore the caveat. The rules of the caveat are in
+[request-pipeline.md](request-pipeline.md#capability-caveats).
 
 The entry also carries `features: ['did-url-targets']`. The token is this
 server's claim that a capability's `invocationTarget` may be a `did:webvh` DID

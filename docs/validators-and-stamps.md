@@ -179,6 +179,12 @@ Writes are gated by `If-Match` / `If-None-Match: *`, which
 the write through `preconditions.ts`. The client's own preconditions go to the
 backend as sent, so a 412 answers only a header the client sent.
 
+A write under an `OwnResourcesOnly` caveat is checked first. The backend decides
+it inside the write's critical section, ahead of the preconditions and the
+write-once rule. A Resource the caveat's principal did not create is refused as
+the masked `not-found`, not as a 412. See
+[request-pipeline.md](request-pipeline.md#capability-caveats).
+
 The Space and Collection Metadata objects take both headers. The
 `If-None-Match: *` guarded create is what resolves two clients provisioning the
 same Space or Collection at once. The loser's replace-semantics `PUT` would

@@ -101,6 +101,9 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
 - **`src/zcap.ts`** -- `handleZcapVerify()` performs the capability-invocation
   signature verification against the Space controller's key. See
   [ZCap Structure](#zcap-structure).
+- **`src/lib/ownResourcesOnly.ts`** -- the `OwnResourcesOnly` capability caveat:
+  the per-route rule type, the verifier's caveat handler, and the principals of
+  a verified chain. See [Caveats](#zcap-structure).
 - **`src/lib/hostedPageSandbox.ts`** -- an `onSend` hook every route group
   installs (`installGroupHooks`) stamps `Content-Security-Policy: sandbox ...`
   on every response in the PWS and `/kms` groups, 304s, redirects and errors
@@ -161,8 +164,9 @@ start.ts > server.ts > routes.ts > requests/*Request.ts > storage.ts > backends/
   carries `originId` and `serverDid`; the `instance` member carries
   `exportSigningMethod`. The zCap authorization profile entry carries
   `features: ['did-url-targets']`, the claim that a capability may name a DID
-  URL as its target. The replication entry carries `url`. A root-level `onSend`
-  hook appends `Link: <.../service>; rel="service"` to every response. See
+  URL as its target, and `zcapCaveats: ['OwnResourcesOnly']`, the caveat types
+  it enforces. The replication entry carries `url`. A root-level `onSend` hook
+  appends `Link: <.../service>; rel="service"` to every response. See
   [docs/service-description.md](docs/service-description.md).
 - **`src/lib/serverIdentity.ts`**, **`src/lib/provenanceStatement.ts`**,
   **`src/lib/exportProvenance.ts`**, **`src/lib/importProvenance.ts`** -- the
@@ -592,6 +596,21 @@ adds two invocation-time bounds on `PUT` at a Space Metadata URL and `DELETE` at
 a canonical Space URL. The service description's client-annex entry claims the
 clause, and a change to what it admits is a new version of that entry. Full
 rules in [docs/client-annex-clause.md](docs/client-annex-clause.md).
+
+**Caveats:** a capability may carry a `caveat` member, an object or an array of
+objects with a `type`. The server understands one type, `OwnResourcesOnly`, and
+lists it as `zcapCaveats` on the authorization profile entry. A chain with any
+other caveat type is refused on every route family, `/kms` included. A chain
+carrying `OwnResourcesOnly` is served only by a route that names a rule for it
+(`lib/ownResourcesOnly.ts`). Under the caveat the capability reaches the
+Resources whose `createdBy` lists the controller of the capability that carries
+it. A write is decided by the backend inside its critical section. A read is
+decided by the handler, from the record it serves. A backend lists the caveat
+types it enforces in `enforcedCaveats`, and the plugin refuses to start with one
+that leaves out an advertised type. The Collection listing is filtered. Every
+refusal is the masked `not-found`. Full rules in
+[docs/request-pipeline.md](docs/request-pipeline.md) and
+[decision 0008](decisions/0008-capability-caveats-and-own-resources-only.md).
 
 **The container rule** (`lib/containerRule.ts`): an unsafe method at a container
 URL is controller-only, since a data grant's `invocationTarget` is the container

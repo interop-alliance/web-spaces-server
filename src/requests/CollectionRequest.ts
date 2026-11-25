@@ -11,6 +11,7 @@ import type { ChangeDocument, ChangesCheckpoint } from '@interop/storage-core'
 import { buildLinkset } from '../policy.js'
 import { fetchSpaceAndAuthorize, fetchSpaceAndVerify } from './spaceContext.js'
 import {
+  assertPolicyGrantsRead,
   fetchCollectionAndBackend,
   getCollectionOrThrow,
   projectCollectionMetadata,
@@ -156,7 +157,8 @@ export class CollectionRequest {
       request,
       spaceId,
       targetPath: collectionPath({ spaceId, collectionId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     // Fetch collection by id
@@ -251,7 +253,8 @@ export class CollectionRequest {
       spaceId,
       collectionId,
       targetPath: linksetPath({ spaceId, collectionId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     const linkset = await buildLinkset({
@@ -302,7 +305,8 @@ export class CollectionRequest {
       spaceId,
       collectionId,
       targetPath: backendPath({ spaceId, collectionId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     // Fetch collection by id
@@ -364,7 +368,8 @@ export class CollectionRequest {
       spaceId,
       collectionId,
       targetPath: collectionMetaPath({ spaceId, collectionId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     // authorized, continue. Metadata cannot exist apart from its Collection:
@@ -638,7 +643,8 @@ export class CollectionRequest {
       spaceId,
       collectionId,
       targetPath: collectionLogPath({ spaceId, collectionId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     // authorized, continue
@@ -1443,13 +1449,14 @@ export class CollectionRequest {
     // within an already-authorized target and do not change the capability
     // target. Authorization still runs before any cursor validation below, so an
     // under-authorized caller gets the merged 404 -- never an `invalid-cursor`.
-    await fetchSpaceAndAuthorize({
+    const { ownResourcesOnly: ownedBy } = await fetchSpaceAndAuthorize({
       request,
       spaceId,
       collectionId,
       targetPath: collectionPath({ spaceId, collectionId }),
       requestName,
-      allowTargetQuery: true
+      allowTargetQuery: true,
+      ownResources: 'listing'
     })
 
     // Fetch collection by id, and list (or filter-query) from the Collection's
@@ -1468,6 +1475,17 @@ export class CollectionRequest {
     // absence leaves the ordinary listing below untouched.
     const filters = parseListFilter({ query: request.query, requestName })
     if (filters !== undefined) {
+      // A filtered listing is a query, which a capability does not reach
+      // under an `OwnResourcesOnly` caveat. It is served only when a policy
+      // grants the read to everyone.
+      if (ownedBy !== undefined) {
+        await assertPolicyGrantsRead({
+          request,
+          spaceId,
+          collectionId,
+          requestName
+        })
+      }
       // Fail-closed declared-names check, the same rule as the POST profile:
       // every filter attribute MUST be declared in the Collection's
       // `plaintext.indexes` (an encrypted Collection has none, so a filter
@@ -1511,7 +1529,10 @@ export class CollectionRequest {
       // flag come from it.
       collectionMetadata,
       ...(limit !== undefined && { limit }),
-      ...(cursor !== undefined && { cursor })
+      ...(cursor !== undefined && { cursor }),
+      // Under an `OwnResourcesOnly` caveat the listing holds the principal's
+      // own Resources only, and `totalItems` counts only those.
+      ownedBy
     })
 
     return reply

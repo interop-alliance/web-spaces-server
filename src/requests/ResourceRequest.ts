@@ -5,11 +5,15 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { fetchSpaceAndAuthorize, fetchSpaceAndVerify } from './spaceContext.js'
 import {
+  assertOwnReadServed,
+  assertOwnResourceBeforeWrite,
+  fetchBackendForResourceRead,
   fetchCollectionAndBackend,
   getCollectionOrThrow,
   getResourceMetadataOrThrow,
   isControlPlaneBackend,
-  resourceWriteOptions
+  resourceWriteOptions,
+  type OwnRead
 } from './collectionContext.js'
 import { resolveResourceInput } from './resourceInput.js'
 import { resolveBackend } from '../lib/backendRegistry.js'
@@ -38,7 +42,11 @@ import {
   sendHeadFromMetadata,
   withEtag
 } from './notModified.js'
-import type { ResourceMetadata, ResourceWriteMembers } from '../types.js'
+import type {
+  ResourceMetadata,
+  ResourceWriteMembers,
+  StorageBackend
+} from '../types.js'
 
 /**
  * The body of a Resource write response: the server-managed members of the
@@ -70,6 +78,54 @@ function writeResponseBody({
     ...(provenance && createdBy !== undefined && { createdBy }),
     ...(metaStamp && meta !== undefined && { meta })
   }
+}
+
+/**
+ * Authorizes a read at a Resource URL and resolves the data-plane backend to
+ * read it from, for Get Resource and Head Resource. The decision is
+ * capability-or-policy, and a request authorized under `OwnResourcesOnly`
+ * caveats is checked against the Resource (`fetchBackendForResourceRead`),
+ * and the handler passes the resolved `ownRead` to `assertOwnReadServed`
+ * with the record it serves.
+ *
+ * @param options {object}
+ * @param options.request {FastifyRequest}   the request, with its ids
+ *   already validated
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {Promise<{ dataBackend: StorageBackend, ownRead?: OwnRead }>}
+ */
+async function authorizeResourceRead({
+  request,
+  requestName
+}: {
+  request: FastifyRequest<{
+    Params: { spaceId: string; collectionId: string; resourceId: string }
+  }>
+  requestName: string
+}): Promise<{ dataBackend: StorageBackend; ownRead?: OwnRead }> {
+  const {
+    params: { spaceId, collectionId, resourceId }
+  } = request
+  const { ownResourcesOnly } = await fetchSpaceAndAuthorize({
+    request,
+    spaceId,
+    collectionId,
+    resourceId,
+    targetPath: resourcePath({ spaceId, collectionId, resourceId }),
+    requestName,
+    ownResources: 'resource'
+  })
+
+  // Under an `OwnResourcesOnly` caveat the Resource must be the principal's
+  // own, or readable by everyone under a policy.
+  return await fetchBackendForResourceRead({
+    request,
+    ownResourcesOnly,
+    spaceId,
+    collectionId,
+    resourceId,
+    requestName
+  })
 }
 
 export class ResourceRequest {
@@ -106,8 +162,10 @@ export class ResourceRequest {
       request,
       spaceId,
       targetPath: resourcePath({ spaceId, collectionId, resourceId }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
+    const { ownResourcesOnly: ownedBy } = invocation
 
     // zCap checks out, continue
 
@@ -135,6 +193,18 @@ export class ResourceRequest {
     // did:webvh controller resolves from, so its write must fast-forward the
     // stored log (412 otherwise), under preconditions pinned to the log read.
     const clientPreconditions = parseWritePreconditions(request.headers)
+    // The guard below reads the stored log and answers from it, so a caveat
+    // chain is checked against the stored Resource first.
+    if (resourceId === WEBVH_LOG_RESOURCE_ID) {
+      await assertOwnResourceBeforeWrite({
+        dataBackend,
+        ownResourcesOnly: ownedBy,
+        spaceId,
+        collectionId,
+        resourceId,
+        requestName
+      })
+    }
     const { input, ...preconditions } =
       resourceId === WEBVH_LOG_RESOURCE_ID
         ? await guardWebvhLogWrite({
@@ -168,6 +238,7 @@ export class ResourceRequest {
         resourceId,
         input,
         ...writeOptions,
+        ownedBy,
         ...preconditions
       })
     )
@@ -222,24 +293,10 @@ export class ResourceRequest {
 
     // Authorize (capability-or-policy): capability invocation first, then fall
     // back to the effective access-control policy (e.g. a world-readable
-    // Resource). Throws on denial.
-    await fetchSpaceAndAuthorize({
+    // Resource). Throws on denial. Resolves the Collection's selected
+    // (data-plane) backend to read the bytes from.
+    const { dataBackend, ownRead } = await authorizeResourceRead({
       request,
-      spaceId,
-      collectionId,
-      resourceId,
-      targetPath: resourcePath({ spaceId, collectionId, resourceId }),
-      requestName
-    })
-
-    // authorized, continue
-
-    // Fetch collection by id, and read the bytes from the Collection's selected
-    // (data-plane) backend.
-    const { dataBackend } = await fetchCollectionAndBackend({
-      request,
-      spaceId,
-      collectionId,
       requestName
     })
 
@@ -273,6 +330,19 @@ export class ResourceRequest {
         contentType
       })
     )
+    // Under an `OwnResourcesOnly` caveat the stream served is the Resource
+    // the read was decided from. The stream is already open, so it is
+    // destroyed on a refusal.
+    try {
+      assertOwnReadServed({
+        ownRead,
+        createdBy: result.createdBy,
+        requestName
+      })
+    } catch (err) {
+      result.resourceStream.destroy()
+      throw err
+    }
 
     // Surface the ETag validator (the conditional-writes feature) when the
     // backend tracks one for this Resource.
@@ -316,23 +386,10 @@ export class ResourceRequest {
 
     // Authorize (capability-or-policy): the same read decision as Get Resource,
     // against the same target (a HEAD reveals nothing a GET would not).
-    await fetchSpaceAndAuthorize({
+    // Resolves the Collection's selected (data-plane) backend to read
+    // Metadata from.
+    const { dataBackend, ownRead } = await authorizeResourceRead({
       request,
-      spaceId,
-      collectionId,
-      resourceId,
-      targetPath: resourcePath({ spaceId, collectionId, resourceId }),
-      requestName
-    })
-
-    // authorized, continue
-
-    // Fetch collection by id, and read Metadata from the Collection's selected
-    // (data-plane) backend.
-    const { dataBackend } = await fetchCollectionAndBackend({
-      request,
-      spaceId,
-      collectionId,
       requestName
     })
     const metadata = await getResourceMetadataOrThrow({
@@ -340,6 +397,11 @@ export class ResourceRequest {
       spaceId,
       collectionId,
       resourceId,
+      requestName
+    })
+    assertOwnReadServed({
+      ownRead,
+      createdBy: metadata.createdBy,
       requestName
     })
 
@@ -377,23 +439,27 @@ export class ResourceRequest {
     // Authorize (capability-or-policy): the capability's `invocationTarget` is
     // the full `/meta` URL (matching the request URL), and the policy level
     // resolves at the resource as for Get Resource.
-    await fetchSpaceAndAuthorize({
+    const { ownResourcesOnly } = await fetchSpaceAndAuthorize({
       request,
       spaceId,
       collectionId,
       resourceId,
       targetPath: metaPath({ spaceId, collectionId, resourceId }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
 
     // authorized, continue
 
     // Fetch collection by id, and read Metadata from the Collection's selected
-    // (data-plane) backend.
-    const { dataBackend } = await fetchCollectionAndBackend({
+    // (data-plane) backend. Under an `OwnResourcesOnly` caveat the Resource
+    // must be the principal's own, or readable by everyone under a policy.
+    const { dataBackend, ownRead } = await fetchBackendForResourceRead({
       request,
+      ownResourcesOnly,
       spaceId,
       collectionId,
+      resourceId,
       requestName
     })
     const metadata = await getResourceMetadataOrThrow({
@@ -401,6 +467,11 @@ export class ResourceRequest {
       spaceId,
       collectionId,
       resourceId,
+      requestName
+    })
+    assertOwnReadServed({
+      ownRead,
+      createdBy: metadata.createdBy,
       requestName
     })
 
@@ -477,11 +548,12 @@ export class ResourceRequest {
 
     // Verify (capability-only): writing metadata requires a valid capability
     // invocation (the `PUT` action); no access-control-policy fallback.
-    await fetchSpaceAndVerify({
+    const { ownResourcesOnly: ownedBy } = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: metaPath({ spaceId, collectionId, resourceId }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
 
     // zCap checks out, continue
@@ -530,6 +602,7 @@ export class ResourceRequest {
         resourceId,
         custom,
         epoch,
+        ownedBy,
         ...parseWritePreconditions(request.headers)
       })
     )
@@ -598,11 +671,12 @@ export class ResourceRequest {
 
     // Verify (capability-only): deleting a Resource requires a valid capability
     // invocation; no access-control-policy fallback.
-    await fetchSpaceAndVerify({
+    const { ownResourcesOnly: ownedBy } = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: resourcePath({ spaceId, collectionId, resourceId }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
 
     // Fetch collection by id, and delete from the Collection's selected
@@ -632,7 +706,8 @@ export class ResourceRequest {
         collectionId,
         resourceId,
         ifMatch,
-        writerId
+        writerId,
+        ownedBy
       })
       // An external data-plane backend keeps no policies, so the Resource's
       // policy is tombstoned in the control-plane store here. The two stores

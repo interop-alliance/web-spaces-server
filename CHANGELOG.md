@@ -1,8 +1,27 @@
 # History
 
-## 0.47.3 - TBD
+## 0.48.0 - TBD
+
+### Added
+
+- Capability caveats. A capability's `caveat` member is enforced, and a chain
+  carrying a caveat type the server does not understand is refused on every
+  route family.
+- The `OwnResourcesOnly` caveat. A capability carrying it reaches only the
+  Resources its controller created: Resource and chunk reads, writes and
+  deletes. The Collection listing is filtered to those Resources, `totalItems`
+  included. The caveat requires an `eddsa-jcs-2022` proof on its capability.
+- The authorization profile entry of `/service` lists
+  `zcapCaveats: ['OwnResourcesOnly']`.
+- `StorageBackend.enforcedCaveats`, the caveat types a backend enforces. The
+  plugin refuses to start with a backend that leaves out an advertised type.
+- `getResource` returns the record's `createdBy` beside the stream.
+- Import Space installs the archived revocation of a grant that carries
+  `OwnResourcesOnly`.
 
 ### Changed
+
+- The advertised zCap authorization profile version is `0.2`, up from `0.1`.
 
 - CI runs the Postgres backend suites, the mixed-backend suites and the
   hard-quota and exact-usage storage-contract tests against a Postgres service

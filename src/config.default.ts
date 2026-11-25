@@ -378,7 +378,7 @@ export const SPEC_VERSION = '0.5'
  * The version of the zCap authorization profile this server implements, as the
  * service description advertises it (`major.minor`, no patch level).
  */
-export const AUTHZ_PROFILE_VERSION = '0.1'
+export const AUTHZ_PROFILE_VERSION = '0.2'
 
 /**
  * The rendered location of the zCap authorization profile at the version above,

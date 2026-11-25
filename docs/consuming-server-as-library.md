@@ -258,6 +258,13 @@ invariants are documented on the interface itself; the load-bearing ones:
 - throw the package's typed errors (`PreconditionFailedError`,
   `PayloadTooLargeError`, ...) so the request layer's error handler maps them to
   the spec's problem-details responses;
+- list each capability caveat type the backend enforces in `enforcedCaveats`.
+  The plugin refuses to start with a backend that leaves out a type the server
+  advertises. Enforcing `OwnResourcesOnly` means honoring the `ownedBy` option
+  of `writeResource`, `deleteResource`, `writeResourceMetadata`, `writeChunk`,
+  `deleteChunk` and `listCollectionItems`, deciding a write or a delete inside
+  its critical section, and returning the record's `createdBy` from
+  `getResource`;
 - expose a `logger` property typed as Fastify's `FastifyBaseLogger`, defaulting
   to a silent logger -- the plugin overwrites it with `fastify.log` at
   registration (unless `ownsBackend: false`), so backend diagnostics flow to the

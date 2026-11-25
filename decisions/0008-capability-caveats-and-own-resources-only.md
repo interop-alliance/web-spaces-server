@@ -1,14 +1,14 @@
 # 0008: Capability caveats and the `OwnResourcesOnly` caveat
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-20
 - Driving work: letting a guest edit or delete only the Resources that guest
   created in a shared Collection, raised in GitHub issue 40 and its design
   discussion (2026-11-15).
 - Affects: web-spaces-server (`src/zcap.ts`, a new chain inspector, the Resource
   write and delete paths of both backends, `src/serviceDescription.ts`);
-  `@interop/storage-core` (the write and delete options that carry the condition
-  to a backend); portable-web-spaces-spec (a caveats section in the zCap
+  `@interop/storage-core` (the `zcapCaveats` member of the authorization profile
+  entry type); portable-web-spaces-spec (a caveats section in the zCap
   authorization profile, with the must-understand rule, `zcapCaveats`, the suite
   rule and the `OwnResourcesOnly` definition); pws-client (mint a grant with the
   caveat, reading `zcapCaveats` first); pws-conformance-suite (cases for the
@@ -54,8 +54,10 @@ is `OwnResourcesOnly`.
    already defines. Its value is one object or an array of objects. Each object
    has a non-empty string `type`. This was settled in the design discussion of
    GitHub issue 40 on 2026-11-15.
-2. The first caveat type is named `OwnResourcesOnly`. It applies to every action
-   the capability allows, `GET` and `HEAD` included. The principal is the
+2. The first caveat type is named `OwnResourcesOnly`. Its object carries `type`
+   alone, and one that carries any other member is refused, so a parameter added
+   later cannot be ignored by a server released before it. It applies to every
+   action the capability allows, `GET` and `HEAD` included. The principal is the
    controller of the capability that carries the caveat. A caveat on any link
    binds the invocation. When two links carry it, both must hold. Under a chain
    carrying it, the server answers as follows.
@@ -64,9 +66,17 @@ is `OwnResourcesOnly`.
      Resource's `createdBy` list. A Resource with no `createdBy` is refused.
    - A request that creates a Resource is unaffected. That covers a `POST` to
      the Collection and a `PUT` at an absent Resource id.
+   - A `DELETE` at an absent Resource id is refused. A `DELETE` over a tombstone
+     succeeds only when the principal appears in the tombstone's `createdBy`
+     list. Without a caveat both answer 204.
    - A Collection listing succeeds and is filtered. It lists only the Resources
      whose `createdBy` holds the principal, and its `totalItems` counts only
-     those.
+     those. A public-read policy on the Collection does not widen it. A request
+     with no authorization headers lists every Resource under the policy.
+   - A chain is refused on every route when any delegated capability in it has
+     no single controller. A create under it would record no `createdBy`, and
+     its creator could not reach the Resource again. A revocation submission is
+     still accepted.
    - A `GET` or `HEAD` that describes a container is unaffected. The capability
      decides it as if it carried no caveat. That covers the Collection Metadata
      and its governing history log, the Space Metadata, the Space listing, the
@@ -165,6 +175,19 @@ Supporting the legacy suite would need a published JSON-LD context per caveat
 type, plus an `allowedContexts` entry. `@interop/zcap` 12 refuses any other
 context on a delegated capability.
 
+### Why a delete at an absent id is refused
+
+Delete Resource is idempotent, so an absent id answers 204. Another party's
+Resource answers the masked `not-found`. A guest could tell the two apart and
+test whether an id exists, leaving no trace. Refusing the absent id closes that.
+A tombstone keeps its `createdBy`, so a guest's repeat delete of its own
+Resource still answers 204.
+
+A `PUT` still tells the two apart, since a `PUT` at an absent id creates. That
+probe leaves a Resource under the guest's own `createdBy` each time it misses. A
+Collection that must hide which ids exist takes its Resources by `POST`, which
+mints a random id.
+
 ## Rejected Alternatives
 
 - Applying the caveat to `PUT` and `DELETE` alone, with reads unaffected. One
@@ -223,10 +246,14 @@ context on a delegated capability.
   of a creating write.
 - Another guest holding the same kind of grant does not match.
 - For a write or a delete the decision is made in the backend, inside the
-  write's critical section, so `@interop/storage-core` gains a condition on the
-  write and delete options. Both backends implement it. A read is decided
-  outside any lock. `createdBy` is set at creation and kept on every later
-  write, so a read sees the same list a write would.
+  write's critical section, so the backend's write and delete options gain a
+  condition. Both backends implement it. A backend lists the caveat types it
+  enforces, and the server refuses to start with one that leaves out a type it
+  advertises.
+- A read is decided outside any lock. `createdBy` is set at creation and kept on
+  every later write. A create over a tombstone records a new one, so the handler
+  checks the `createdBy` of the record it serves, and not only the one it read
+  to decide.
 - A chain with an unknown caveat type is refused on every route family, the
   `/kms` routes included.
 - A deployment on an older verifier cannot enforce the caveat. It advertises no

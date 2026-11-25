@@ -12,6 +12,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { fetchSpaceAndAuthorize, fetchSpaceAndVerify } from './spaceContext.js'
 import {
+  assertOwnReadOfParentServed,
+  fetchBackendForResourceRead,
   fetchCollectionAndBackend,
   getResourceMetadataOrThrow,
   readChunkMetadataOrThrow,
@@ -70,8 +72,11 @@ interface ChunkParams {
  * @param options {object}
  * @param options.request {FastifyRequest}
  * @param options.requestName {string}   request name used in error titles
- * @returns {Promise<object>}   the parsed ids, the chunk index, and the
- *   Collection's data-plane backend
+ * @returns {Promise<object>}   the parsed ids, the chunk index, the
+ *   Collection's data-plane backend, and `confirmOwnRead`, which the handler
+ *   awaits once it holds what it serves: under an `OwnResourcesOnly` caveat
+ *   it requires that the parent Resource is still the one the read was
+ *   decided from
  */
 async function authorizeChunkRead({
   request,
@@ -85,6 +90,7 @@ async function authorizeChunkRead({
   resourceId: string
   chunkIndex: number
   dataBackend: StorageBackend
+  confirmOwnRead: () => Promise<void>
 }> {
   const {
     params: { spaceId, collectionId, resourceId }
@@ -98,25 +104,46 @@ async function authorizeChunkRead({
 
   // Authorize (capability-or-policy) against the chunk's own URL; the policy
   // level resolves at the parent Resource, as for Get Resource.
-  await fetchSpaceAndAuthorize({
+  const { ownResourcesOnly } = await fetchSpaceAndAuthorize({
     request,
     spaceId,
     collectionId,
     resourceId,
     targetPath: chunkPath({ spaceId, collectionId, resourceId, chunkIndex }),
-    requestName
+    requestName,
+    ownResources: 'resource'
   })
 
   // authorized, continue
 
-  // Fetch collection by id, and its selected (data-plane) backend.
-  const { dataBackend } = await fetchCollectionAndBackend({
+  // Fetch collection by id, and its selected (data-plane) backend. Under an
+  // `OwnResourcesOnly` caveat a chunk is decided by its parent Resource's
+  // `createdBy`.
+  const { dataBackend, ownRead } = await fetchBackendForResourceRead({
     request,
+    ownResourcesOnly,
     spaceId,
     collectionId,
+    resourceId,
     requestName
   })
-  return { spaceId, collectionId, resourceId, chunkIndex, dataBackend }
+  const confirmOwnRead = () =>
+    assertOwnReadOfParentServed({
+      ownRead,
+      dataBackend,
+      spaceId,
+      collectionId,
+      resourceId,
+      requestName
+    })
+  return {
+    spaceId,
+    collectionId,
+    resourceId,
+    chunkIndex,
+    dataBackend,
+    confirmOwnRead
+  }
 }
 
 export class ChunkRequest {
@@ -151,11 +178,12 @@ export class ChunkRequest {
 
     // Verify (capability-only): writing a chunk requires a valid capability
     // invocation against the chunk's own URL; no access-control-policy fallback.
-    await fetchSpaceAndVerify({
+    const { ownResourcesOnly: ownedBy } = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: chunkPath({ spaceId, collectionId, resourceId, chunkIndex }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
 
     // zCap checks out, continue
@@ -177,22 +205,33 @@ export class ChunkRequest {
     // storage layer, which evaluates it against the chunk's own validator
     // atomically with the write (412 `precondition-failed` on a mismatch).
     const written = await withStorageErrors({ requestName }, () =>
-      dataBackend.writeChunk({
-        spaceId,
-        collectionId,
-        resourceId,
-        chunkIndex,
-        input,
-        // Chunks inherit the Collection's write-once rule
-        // (`revisions.immutable`).
-        ...writeOnceOptions({
-          request,
+      dataBackend
+        .writeChunk({
           spaceId,
           collectionId,
-          collectionMetadata
-        }),
-        ...parseWritePreconditions(request.headers)
-      })
+          resourceId,
+          chunkIndex,
+          input,
+          // Chunks inherit the Collection's write-once rule
+          // (`revisions.immutable`).
+          ...writeOnceOptions({
+            request,
+            spaceId,
+            collectionId,
+            collectionMetadata
+          }),
+          ownedBy,
+          ...parseWritePreconditions(request.headers)
+        })
+        // The backend names an absent parent under its own request name.
+        // The masked body must be the one every other refusal of this
+        // request carries.
+        .catch((err: unknown) => {
+          if (err instanceof ResourceNotFoundError) {
+            throw new ResourceNotFoundError({ requestName })
+          }
+          throw err
+        })
     )
     // Return the new ETag so a client can chain a subsequent conditional write.
     return reply.status(204).header('etag', formatEtag(written)).send()
@@ -214,8 +253,14 @@ export class ChunkRequest {
     reply: FastifyReply
   ): Promise<FastifyReply> {
     const requestName = 'Get Chunk'
-    const { spaceId, collectionId, resourceId, chunkIndex, dataBackend } =
-      await authorizeChunkRead({ request, requestName })
+    const {
+      spaceId,
+      collectionId,
+      resourceId,
+      chunkIndex,
+      dataBackend,
+      confirmOwnRead
+    } = await authorizeChunkRead({ request, requestName })
 
     // A conditional read (spec "Caching") consults the chunk's metadata first
     // (through the same parent-Resource gate as Head Chunk) and answers 304
@@ -259,6 +304,13 @@ export class ChunkRequest {
         requestName
       })
     )
+    // The stream is already open, so it is destroyed on a refusal.
+    try {
+      await confirmOwnRead()
+    } catch (err) {
+      result.resourceStream.destroy()
+      throw err
+    }
 
     return withEtag({
       reply: reply.status(200).type(result.storedResourceType),
@@ -285,8 +337,14 @@ export class ChunkRequest {
     const requestName = 'Head Chunk'
     // The same read decision as Get Chunk, against the same target (a HEAD
     // reveals nothing a GET would not).
-    const { spaceId, collectionId, resourceId, chunkIndex, dataBackend } =
-      await authorizeChunkRead({ request, requestName })
+    const {
+      spaceId,
+      collectionId,
+      resourceId,
+      chunkIndex,
+      dataBackend,
+      confirmOwnRead
+    } = await authorizeChunkRead({ request, requestName })
     // The same parent-Resource existence gate as Get Chunk (an orphan chunk's
     // headers reveal what a GET would).
     const metadata = await readChunkMetadataOrThrow({
@@ -297,6 +355,7 @@ export class ChunkRequest {
       chunkIndex,
       requestName
     })
+    await confirmOwnRead()
 
     return sendHeadFromMetadata({ request, reply, metadata })
   }
@@ -330,11 +389,12 @@ export class ChunkRequest {
 
     // Verify (capability-only): deleting a chunk requires a valid capability
     // invocation; no access-control-policy fallback.
-    await fetchSpaceAndVerify({
+    const { ownResourcesOnly: ownedBy } = await fetchSpaceAndVerify({
       request,
       spaceId,
       targetPath: chunkPath({ spaceId, collectionId, resourceId, chunkIndex }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
 
     // Fetch collection by id, and delete from the Collection's selected
@@ -365,7 +425,8 @@ export class ChunkRequest {
         collectionId,
         resourceId,
         chunkIndex,
-        ifMatch
+        ifMatch,
+        ownedBy
       })
     })
     if (!removed) {
@@ -410,13 +471,14 @@ export class ChunkRequest {
 
     // Authorize (capability-or-policy) against the `chunks/` container path;
     // the policy level resolves at the parent Resource.
-    await fetchSpaceAndAuthorize({
+    const { ownResourcesOnly } = await fetchSpaceAndAuthorize({
       request,
       spaceId,
       collectionId,
       resourceId,
       targetPath: chunksContainerPath({ spaceId, collectionId, resourceId }),
-      requestName
+      requestName,
+      ownResources: 'resource'
     })
 
     // authorized, continue
@@ -425,10 +487,12 @@ export class ChunkRequest {
     // (data-plane) backend. The parent Resource must exist for its chunk
     // listing to (an absent Resource has no `chunks/` container) -- checked via
     // its metadata, never its byte stream.
-    const { dataBackend } = await fetchCollectionAndBackend({
+    const { dataBackend, ownRead } = await fetchBackendForResourceRead({
       request,
+      ownResourcesOnly,
       spaceId,
       collectionId,
+      resourceId,
       requestName
     })
     const listing = await withStorageErrors({ requestName }, () =>
@@ -445,6 +509,16 @@ export class ChunkRequest {
         requestName
       })
     )
+    // Under an `OwnResourcesOnly` caveat the parent Resource is still the one
+    // the read was decided from.
+    await assertOwnReadOfParentServed({
+      ownRead,
+      dataBackend,
+      spaceId,
+      collectionId,
+      resourceId,
+      requestName
+    })
 
     return reply
       .status(200)

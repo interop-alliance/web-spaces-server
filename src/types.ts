@@ -187,12 +187,17 @@ export type RecordValidatorParts = { generation?: string } & Partial<WriteStamp>
 
 /**
  * Return shape of `getResource()`: the byte stream and its content-type,
- * beside the content record's validator parts.
+ * beside the content record's validator parts. A Resource read also carries
+ * the `createdBy` of the record the stream was opened from, when the record
+ * has one. A read under an `OwnResourcesOnly` caveat is decided from it, so a
+ * backend that leaves it out has every such read refused. A chunk read
+ * carries none.
  */
 export interface ResourceResult extends RecordValidatorParts {
   resourceStream: Readable
   /** resolved content-type of the stored bytes */
   storedResourceType: string
+  createdBy?: IDID[]
 }
 
 /**
@@ -887,6 +892,18 @@ export interface StorageBackend {
   readonly originId: string
 
   /**
+   * The capability caveat types this backend enforces. `OwnResourcesOnly`
+   * means the backend honors the `ownedBy` option of `writeResource`,
+   * `deleteResource`, `writeResourceMetadata`, `writeChunk`, `deleteChunk`
+   * and `listCollectionItems`, inside the write's critical section for the
+   * writes and deletes, and returns `createdBy` from `getResource`. The
+   * request layer relies on the backend for those decisions, so the plugin
+   * refuses to start with a backend that does not list every caveat type the
+   * server advertises (`zcapCaveats` on `/service`).
+   */
+  readonly enforcedCaveats: readonly string[]
+
+  /**
    * OPTIONAL shutdown hook (e.g. draining a connection pool). Wired to the
    * Fastify `onClose` hook by the plugin composition. Backends without
    * teardown work omit it.
@@ -1188,6 +1205,12 @@ export interface StorageBackend {
    * data-plane backend selected by a Collection never holds the Collection
    * Metadata itself (it lives on the control plane), so it MUST be passed in
    * for such a backend.
+   *
+   * With a non-empty `ownedBy`, the listing holds only the Resources whose
+   * `createdBy` lists every one of those principals, and `totalItems` counts
+   * only those. A Resource with no `createdBy` is left out. Pagination runs
+   * over the filtered set: `limit` bounds the items returned, and `next` is
+   * present if and only if a further matching Resource may follow.
    */
   listCollectionItems(options: {
     spaceId: string
@@ -1195,6 +1218,11 @@ export interface StorageBackend {
     limit?: number
     cursor?: string
     collectionMetadata?: CollectionMetadata
+    /**
+     * The principals of the `OwnResourcesOnly` caveats the listing was
+     * authorized under, one per caveat
+     */
+    ownedBy?: IDID[]
   }): Promise<CollectionResourcesList>
 
   /**
@@ -1287,6 +1315,17 @@ export interface StorageBackend {
      * guarded create cannot land between that read and the write.
      */
     immutable?: true | ImmutableUnder
+    /**
+     * The principals of the `OwnResourcesOnly` caveats the invocation that
+     * authorized this request verified under, one per caveat. Decided inside
+     * the write's critical section, before the preconditions and the
+     * write-once rule: when the request finds a live Resource, each principal
+     * must appear in that Resource's `createdBy`, else the backend throws
+     * `NotOwnResourceError`. A Resource with no `createdBy` is refused. A
+     * request that finds no live Resource (an absent id or a tombstone) is
+     * unaffected. Absent or empty, nothing is checked.
+     */
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceWriteResult>
@@ -1329,6 +1368,18 @@ export interface StorageBackend {
      * a content write.
      */
     writerId?: string
+    /**
+     * The principals of the `OwnResourcesOnly` caveats the invocation that
+     * authorized this request verified under, one per caveat. Decided inside
+     * the delete's critical section, before the precondition: each principal
+     * must appear in the `createdBy` of the record the delete finds, a live
+     * Resource or a tombstone, else the backend throws
+     * `NotOwnResourceError`. A record with no `createdBy` is refused, and so
+     * is an absent id, so the answer does not tell an absent id from another
+     * party's Resource. A repeat delete of the principals' own Resource
+     * stays the no-op. Absent or empty, nothing is checked.
+     */
+    ownedBy?: IDID[]
   }): Promise<void>
   /**
    * Reads a Resource's Metadata object. The content record's stamp members
@@ -1386,6 +1437,17 @@ export interface StorageBackend {
      * the metadata write -- while a supplied value replaces it. Stored opaquely.
      */
     epoch?: string
+    /**
+     * The principals of the `OwnResourcesOnly` caveats the invocation that
+     * authorized this request verified under, one per caveat. Decided inside
+     * the write's critical section, before the preconditions and the
+     * write-once rule: when the request finds a live Resource, each principal
+     * must appear in that Resource's `createdBy`, else the backend throws
+     * `NotOwnResourceError`. A Resource with no `createdBy` is refused. A
+     * request that finds no live Resource (an absent id or a tombstone) is
+     * unaffected. Absent or empty, nothing is checked.
+     */
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceMetadataWriteResult | undefined>
@@ -1478,6 +1540,17 @@ export interface StorageBackend {
      * callback), applied against a stored chunk at the index.
      */
     immutable?: true | ImmutableUnder
+    /**
+     * The principals of the `OwnResourcesOnly` caveats the invocation that
+     * authorized this request verified under, one per caveat. Decided inside
+     * the write's critical section, before the preconditions and the
+     * write-once rule: when the request finds a live parent Resource, each
+     * principal must appear in that Resource's `createdBy`, else the backend throws
+     * `NotOwnResourceError`. A Resource with no `createdBy` is refused. A
+     * request that finds no live parent Resource is answered as it is with
+     * no principals. Absent or empty, nothing is checked.
+     */
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<EtagValidator>
@@ -1514,6 +1587,17 @@ export interface StorageBackend {
     resourceId: string
     chunkIndex: number
     ifMatch?: string
+    /**
+     * The principals of the `OwnResourcesOnly` caveats the invocation that
+     * authorized this request verified under, one per caveat. Decided inside
+     * the write's critical section, before the preconditions and the
+     * write-once rule: when the request finds a live parent Resource, each
+     * principal must appear in that Resource's `createdBy`, else the backend throws
+     * `NotOwnResourceError`. A Resource with no `createdBy` is refused. A
+     * request that finds no live parent Resource is answered as it is with
+     * no principals. Absent or empty, nothing is checked.
+     */
+    ownedBy?: IDID[]
   }): Promise<boolean>
   /**
    * Lists a Resource's stored chunks in ascending `index` order -- the

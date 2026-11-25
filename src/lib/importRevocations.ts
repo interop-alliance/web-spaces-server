@@ -28,6 +28,7 @@ import type { VerifiedInvocation } from '../zcap.js'
 import { DuplicateRevocationError, InvalidRevocationError } from '../errors.js'
 import { asList } from './chainCapability.js'
 import { isUnderScope } from './isUnderScope.js'
+import { ownResourcesCaveats } from './ownResourcesOnly.js'
 import { absoluteUrl, spaceRevocationsPath } from './paths.js'
 import { revocationRecordFor } from './revocations.js'
 import type { WebvhResolverContext } from './webvhController.js'
@@ -167,7 +168,13 @@ export async function installImportRevocations({
         webvh,
         // As on the revocation route of a Space: the root is not
         // dereferenced, so the record installs wherever the DID now points.
-        admitDidUrlRoot: true
+        admitDidUrlRoot: true,
+        // As on that route too: a grant that carries the `OwnResourcesOnly`
+        // caveat can be revoked, so its archived revocation installs.
+        supportedCaveats: ownResourcesCaveats({
+          rule: 'unaffected',
+          serverUrl: webvh.serverUrl
+        })
       })
       const revocationUrl = absoluteUrl({
         path: spaceRevocationsPath({ spaceId, revocationId: capabilityId }),

@@ -1157,6 +1157,29 @@ describe('Export/Import Space API (wire level)', () => {
       assert.equal(await readStatus(spaceId, bobGrant), 404)
     })
 
+    it('installs a revocation of a grant that carries the OwnResourcesOnly caveat', async () => {
+      const spaceId = `revoked-caveat-${crypto.randomUUID()}`
+      await alice.pws.createSpace({
+        id: spaceId,
+        name: 'Revocation Caveat',
+        controller: alice.did
+      })
+      const spaceUrl = spaceUrlOf(spaceId)
+      const guestGrant = await client({ signer: alice.signer }).delegate({
+        capability: `urn:zcap:root:${encodeURIComponent(spaceUrl)}`,
+        invocationTarget: `${spaceUrl}comments/`,
+        controller: bob.did,
+        allowedActions: ['GET', 'POST', 'PUT', 'DELETE'],
+        expires: anHourFromNow(),
+        caveats: [{ type: 'OwnResourcesOnly' }]
+      })
+      assert.deepEqual(guestGrant.caveat, [{ type: 'OwnResourcesOnly' }])
+      await importInto(spaceId, await archiveNaming(spaceId, guestGrant))
+      const [stored] = await storedRevocations(spaceId)
+      assert.equal(stored.capability.id, guestGrant.id)
+      assert.equal(stored.meta.delegator, alice.did)
+    })
+
     it('installs a revocation whose chain resolves through a history log the archive restores', async () => {
       // A `did:webvh` hosted in the Space's `id` Collection, holding one key
       // under every relationship a delegation needs.

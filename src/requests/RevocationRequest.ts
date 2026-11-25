@@ -21,6 +21,7 @@
  * rooted in that scope (`lib/revocations.ts`).
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import type { CaveatHandler } from '@interop/zcap'
 import {
   assertInvocationPresent,
   capabilityActionOf,
@@ -29,6 +30,7 @@ import {
   verifyRevocationChain
 } from '../zcap.js'
 import { isPlainObject } from '../lib/isPlainObject.js'
+import { ownResourcesCaveats } from '../lib/ownResourcesOnly.js'
 import { revocationRecordFor } from '../lib/revocations.js'
 import { absoluteSpaceUrl } from '../lib/paths.js'
 import {
@@ -68,6 +70,9 @@ import { fetchSpace } from './spaceContext.js'
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL (ms)
  * @param options.admitDidUrlRoot {boolean}   also accept a chain rooted in a
  *   DID URL root capability (a Space scope; see `verifyRevocationChain`)
+ * @param [options.supportedCaveats] {Map<string, CaveatHandler>}   the caveat
+ *   types the submitted chain may carry; absent, a chain with any caveat is
+ *   refused
  * @returns {Promise<object>}   `{ capabilityBody, delegator, chainControllers,
  *   capabilities }`
  */
@@ -79,7 +84,8 @@ async function validateSubmittedCapability({
   webvh,
   maxChainLength,
   maxDelegationTtl,
-  admitDidUrlRoot
+  admitDidUrlRoot,
+  supportedCaveats
 }: {
   body: unknown
   revocationId: string
@@ -89,6 +95,7 @@ async function validateSubmittedCapability({
   maxChainLength?: number
   maxDelegationTtl?: number
   admitDidUrlRoot: boolean
+  supportedCaveats?: Map<string, CaveatHandler>
 }) {
   if (!isPlainObject(body) || typeof body.id !== 'string') {
     throw new InvalidRevocationError({
@@ -115,7 +122,8 @@ async function validateSubmittedCapability({
     webvh,
     maxChainLength,
     maxDelegationTtl,
-    admitDidUrlRoot
+    admitDidUrlRoot,
+    supportedCaveats
   })
   return { capabilityBody: body, ...verified }
 }
@@ -199,6 +207,13 @@ async function submitRevocation({
   // note above). Structural only -- the revocation store is not consulted
   // until after authorization either. Only the 400 is held back; a
   // server-side fault met while verifying the chain surfaces as its 5xx.
+  // A revocation submission is unaffected by the `OwnResourcesOnly` caveat,
+  // on the submitted chain and on the invoking one, so a grant carrying it
+  // can be revoked and its holder can submit. A keystore serves no caveat.
+  const supportedCaveats =
+    'spaceId' in scope
+      ? ownResourcesCaveats({ rule: 'unaffected', serverUrl })
+      : undefined
   let validated:
     Awaited<ReturnType<typeof validateSubmittedCapability>> | undefined
   let validationError: InvalidRevocationError | undefined
@@ -212,7 +227,8 @@ async function submitRevocation({
       maxChainLength,
       maxDelegationTtl,
       // A chain rooted in a DID URL is revocable in a Space.
-      admitDidUrlRoot: 'spaceId' in scope
+      admitDidUrlRoot: 'spaceId' in scope,
+      supportedCaveats
     })
   } catch (err) {
     if (!(err instanceof InvalidRevocationError)) {
@@ -249,6 +265,7 @@ async function submitRevocation({
     // surfaced next.
     submittedDidUrlRoot: validated?.didUrlRoot,
     targetResolver: request.server.peerWebvh,
+    supportedCaveats,
     maxChainLength,
     maxDelegationTtl,
     requestName,

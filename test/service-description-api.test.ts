@@ -94,13 +94,14 @@ describe('Service description API', () => {
           ],
           'https://w3id.org/pws/authz-profile': [
             {
-              version: '0.1',
+              version: '0.2',
               url:
                 'https://w3c-ccg.github.io/portable-web-spaces-spec/' +
                 'authz-profile/',
               signatureAlgorithms: ['EdDSA'],
               zcapCryptosuites: ['eddsa-jcs-2022'],
-              features: ['did-url-targets']
+              features: ['did-url-targets'],
+              zcapCaveats: ['OwnResourcesOnly']
             }
           ],
           'https://w3id.org/pws/encrypted-collections': [
@@ -145,6 +146,7 @@ describe('Service description API', () => {
       expect(profile.signatureAlgorithms).toEqual(['EdDSA'])
       expect(profile.zcapCryptosuites).toEqual(['eddsa-jcs-2022'])
       expect(profile.features).toEqual(['did-url-targets'])
+      expect(profile.zcapCaveats).toEqual(['OwnResourcesOnly'])
       expect(core.features).not.toContain('did-url-targets')
       expect(core).not.toHaveProperty('signatureAlgorithms')
       expect(core).not.toHaveProperty('zcapCryptosuites')

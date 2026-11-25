@@ -236,6 +236,11 @@ import { isPlainObject } from '../lib/isPlainObject.js'
 import { parseJsonOrUndefined } from '../lib/jsonBytes.js'
 import { mapInBatches } from '../lib/mapInBatches.js'
 import {
+  OWN_RESOURCES_ONLY,
+  assertOwnsResource,
+  ownsResource
+} from '../lib/ownResourcesOnly.js'
+import {
   collectionLogResultOf,
   mintCollectionLogWrite
 } from '../lib/governedLog.js'
@@ -1134,6 +1139,12 @@ export class FileSystemBackend implements StorageBackend {
   get originId(): string {
     return this.#originId
   }
+
+  /**
+   * The caveat types this backend enforces (see
+   * `StorageBackend.enforcedCaveats`).
+   */
+  readonly enforcedCaveats = [OWN_RESOURCES_ONLY]
 
   /**
    * Opens a filesystem backend over `dataDir`: brings the data dir to the
@@ -4584,11 +4595,17 @@ export class FileSystemBackend implements StorageBackend {
    * does not count, and no sidecar outside the page is opened unless an id
    * holds both names. A sidecar on the page that does not parse leaves its
    * Resource out, with a `warn` line.
+   *
+   * With a non-empty `ownedBy` (the `OwnResourcesOnly` principals), only the
+   * Resources those principals own (`ownsResource`) are listed and counted.
+   * The owner is in the sidecar, so that path reads every live sidecar the
+   * listing names, and pages over the owned Resources with the same keyset.
    * @param options {object}
    * @param options.spaceId {string}
    * @param options.collectionId {string}
    * @param [options.limit] {number}   requested page size
    * @param [options.cursor] {string}   opaque cursor from a prior page's `next`
+   * @param [options.ownedBy] {IDID[]}   the `OwnResourcesOnly` principals
    * @returns {Promise<CollectionResourcesList>}
    */
   async listCollectionItems({
@@ -4596,13 +4613,15 @@ export class FileSystemBackend implements StorageBackend {
     collectionId,
     limit,
     cursor,
-    collectionMetadata: providedMetadata
+    collectionMetadata: providedMetadata,
+    ownedBy
   }: {
     spaceId: string
     collectionId: string
     limit?: number
     cursor?: string
     collectionMetadata?: CollectionMetadata
+    ownedBy?: IDID[]
   }): Promise<CollectionResourcesList> {
     const collectionDir = this.#collectionDir({ spaceId, collectionId })
     // Prefer the caller's control-plane Collection Metadata object. When this
@@ -4636,6 +4655,56 @@ export class FileSystemBackend implements StorageBackend {
     // the cursor seek (`resourceId > after`) uses, so the keyset is consistent
     // (localeCompare could disagree with the `>` operator and break paging).
     const candidateIds = [...filesById.keys()].sort(compareCodeUnits)
+    const pageSize = resolvePageSize(limit)
+    const encrypted = suppressesItemNames({ collectionMetadata })
+    const listingItem = ({
+      resourceId,
+      contentType,
+      sidecar
+    }: LiveRepresentation) =>
+      collectionListingItem({
+        spaceId,
+        collectionId,
+        resourceId,
+        contentType,
+        custom: sidecar.custom as ResourceMetadataCustom | undefined,
+        epoch: sidecar.epoch,
+        writerId: sidecar.writerId,
+        encrypted
+      })
+
+    // Under `OwnResourcesOnly` principals, `totalItems` counts the owned
+    // Resources, which only their sidecars tell apart, so every candidate is
+    // judged, a bounded number of sidecars at a time. The owned ones, in
+    // keyset order, are then paged as a full list is: `next` follows only
+    // when an owned Resource lies beyond the page.
+    if (ownedBy !== undefined && ownedBy.length > 0) {
+      const { live } = await this.#judgeRepresentations({
+        dir: collectionDir,
+        representations: candidateIds.flatMap(
+          resourceId => filesById.get(resourceId) ?? []
+        ),
+        names
+      })
+      const owned = live.filter(({ sidecar }) =>
+        ownsResource({ ownedBy, createdBy: sidecar.createdBy })
+      )
+      const { page, hasMore } = seekPage({
+        items: owned,
+        cursor,
+        pageSize,
+        keyOf: ({ resourceId }) => resourceId
+      })
+      return collectionResourcesList({
+        spaceId,
+        collectionId,
+        collectionMetadata,
+        totalItems: owned.length,
+        items: page.map(listingItem),
+        hasMore,
+        pageSize
+      })
+    }
 
     // Resolve `limit` within `[1, MAX_PAGE_SIZE]`, defaulting when absent,
     // then judge candidates by their sidecars from the cursor's seek point
@@ -4643,7 +4712,6 @@ export class FileSystemBackend implements StorageBackend {
     // one telling whether a further page follows. A candidate judged out
     // (`#judgeRepresentations`: a file no live sidecar names) does not
     // shrink the page, and only the sidecars needed to fill it are read.
-    const pageSize = resolvePageSize(limit)
     const live: LiveRepresentation[] = []
     const judgedIds = new Set<string>()
     let next = seekStartIndex({
@@ -4686,19 +4754,7 @@ export class FileSystemBackend implements StorageBackend {
 
     // The shared item builder projects each page entry, with the sidecar it
     // was judged live by, onto the wire shape.
-    const encrypted = suppressesItemNames({ collectionMetadata })
-    const items = pageEntries.map(({ resourceId, contentType, sidecar }) =>
-      collectionListingItem({
-        spaceId,
-        collectionId,
-        resourceId,
-        contentType,
-        custom: sidecar.custom as ResourceMetadataCustom | undefined,
-        epoch: sidecar.epoch,
-        writerId: sidecar.writerId,
-        encrypted
-      })
-    )
+    const items = pageEntries.map(listingItem)
 
     return collectionResourcesList({
       spaceId,
@@ -4738,6 +4794,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.input {ResourceInput}
    * @param [options.createdBy] {IDID[]}   the invocation's delegation
    *   chain, recorded as the Resource's `createdBy` on first write only
+   * @param [options.ownedBy] {IDID[]}   the `OwnResourcesOnly` principals; a
+   *   live Resource they do not own refuses the write (`NotOwnResourceError`)
    * @param [options.ifMatch] {string}   `If-Match` precondition (a quoted ETag)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *` (create-if-absent)
    * @returns {Promise<EtagValidator>}   the Resource's new ETag validator
@@ -4751,6 +4809,7 @@ export class FileSystemBackend implements StorageBackend {
     epoch,
     writerId,
     immutable,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -4762,6 +4821,7 @@ export class FileSystemBackend implements StorageBackend {
     epoch?: string
     writerId?: string
     immutable?: true | ImmutableUnder
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceWriteResult> {
@@ -4791,6 +4851,7 @@ export class FileSystemBackend implements StorageBackend {
           writerId,
           immutable,
           assertUnique,
+          ownedBy,
           ifMatch,
           ifNoneMatch
         })
@@ -4890,6 +4951,7 @@ export class FileSystemBackend implements StorageBackend {
     writerId,
     immutable,
     assertUnique,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -4903,6 +4965,7 @@ export class FileSystemBackend implements StorageBackend {
     writerId?: string
     immutable?: true | ImmutableUnder
     assertUnique?: (prior?: MetaSidecar) => Promise<void>
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceWriteResult> {
@@ -4936,6 +4999,13 @@ export class FileSystemBackend implements StorageBackend {
     // The write creates the Resource unless a live one stands, and the
     // sidecar of that live Resource is the only prior provenance it keeps.
     const livePrior = live?.sidecar
+    // A live Resource the `OwnResourcesOnly` principals do not own refuses
+    // the write here, before the write-once rule, the unique-claim scan, the
+    // precondition and any byte is written, so none of their answers reaches
+    // the caller. A create (an absent id or a tombstone) is not checked.
+    if (livePrior !== undefined) {
+      assertOwnsResource({ ownedBy, createdBy: livePrior.createdBy })
+    }
 
     // The write-once rule binds a write over a live Resource, and a write
     // over a tombstone that kept the deleted content's digest. A tombstone
@@ -6099,7 +6169,10 @@ export class FileSystemBackend implements StorageBackend {
     return {
       resourceStream: located.opened,
       storedResourceType: located.sidecar.contentType,
-      ...validatorPartsOf(located.sidecar)
+      ...validatorPartsOf(located.sidecar),
+      ...(located.sidecar.createdBy !== undefined && {
+        createdBy: located.sidecar.createdBy
+      })
     }
   }
 
@@ -6423,6 +6496,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param options.custom {ResourceMetadataCustom | Record<string, unknown>}
+   * @param [options.ownedBy] {IDID[]}   the `OwnResourcesOnly` principals; a
+   *   live Resource they do not own refuses the write (`NotOwnResourceError`)
    * @param [options.ifMatch] {string}   `If-Match` on the current `/meta`
    *   `ETag`
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *` -- write only if
@@ -6439,6 +6514,7 @@ export class FileSystemBackend implements StorageBackend {
     resourceId,
     custom,
     epoch,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -6447,6 +6523,7 @@ export class FileSystemBackend implements StorageBackend {
     resourceId: string
     custom: ResourceMetadataCustom | Record<string, unknown>
     epoch?: string
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceMetadataWriteResult | undefined> {
@@ -6463,6 +6540,9 @@ export class FileSystemBackend implements StorageBackend {
       if (!live) {
         return undefined
       }
+      // A live Resource the `OwnResourcesOnly` principals do not own refuses
+      // the write before its precondition is evaluated.
+      assertOwnsResource({ ownedBy, createdBy: live.sidecar.createdBy })
       const { filePath } = live
       // Evaluate the `/meta` precondition against the current `/meta` `ETag`
       // atomically under the lock, before writing. That `ETag` is the
@@ -6565,6 +6645,11 @@ export class FileSystemBackend implements StorageBackend {
             if (!live) {
               return undefined
             }
+            // The ownership refusal comes before the uniqueness answer, so a
+            // caller who does not own the Resource learns nothing from a 409.
+            // `writeMeta` decides it again under the Resource lock, from the
+            // record its write is built on.
+            assertOwnsResource({ ownedBy, createdBy: live.sidecar.createdBy })
             assertNoUniqueEqualityConflict({
               indexes: uniqueIndexes,
               content: await this.#readJsonContentAt(live),
@@ -6611,6 +6696,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param [options.ifMatch] {string}   `If-Match` precondition (a quoted ETag)
+   * @param [options.ownedBy] {IDID[]}   the `OwnResourcesOnly` principals; a
+   *   live Resource they do not own refuses the delete (`NotOwnResourceError`)
    * @returns {Promise<void>}
    */
   async deleteResource({
@@ -6618,13 +6705,15 @@ export class FileSystemBackend implements StorageBackend {
     collectionId,
     resourceId,
     ifMatch,
-    writerId
+    writerId,
+    ownedBy
   }: {
     spaceId: string
     collectionId: string
     resourceId: string
     ifMatch?: string
     writerId?: string
+    ownedBy?: IDID[]
   }): Promise<void> {
     const collectionDir = this.#collectionDir({ spaceId, collectionId })
     const softDelete = async (): Promise<void> => {
@@ -6646,6 +6735,12 @@ export class FileSystemBackend implements StorageBackend {
         requestName: 'Delete Resource'
       })
       const { prior, live } = located
+      // Under `OwnResourcesOnly` principals the delete is refused unless the
+      // record it finds, live or a tombstone, lists them in `createdBy`. An
+      // absent id is refused too, so the answer does not tell an absent id
+      // from another party's Resource. The refusal comes before the
+      // precondition is evaluated and before anything is removed.
+      assertOwnsResource({ ownedBy, createdBy: prior?.createdBy })
       if (ifMatch !== undefined) {
         await this.#assertWritePrecondition({
           collectionDir,
@@ -6874,6 +6969,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.resourceId {string}
    * @param options.chunkIndex {number}   non-negative integer chunk position
    * @param options.input {ResourceInput}
+   * @param [options.ownedBy] {IDID[]}   the `OwnResourcesOnly` principals; a
+   *   live parent they do not own refuses the write (`NotOwnResourceError`)
    * @param [options.ifMatch] {string}   `If-Match` precondition (a quoted ETag)
    * @param [options.ifNoneMatch] {HeldValidators}   `If-None-Match: *` (create-if-absent)
    * @returns {Promise<EtagValidator>}   the chunk's new ETag validator
@@ -6885,6 +6982,7 @@ export class FileSystemBackend implements StorageBackend {
     chunkIndex,
     input,
     immutable,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -6894,6 +6992,7 @@ export class FileSystemBackend implements StorageBackend {
     chunkIndex: number
     input: ResourceInput
     immutable?: true | ImmutableUnder
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<EtagValidator> {
@@ -6918,6 +7017,7 @@ export class FileSystemBackend implements StorageBackend {
               chunkIndex,
               input,
               immutable,
+              ownedBy,
               ifMatch,
               ifNoneMatch
             })
@@ -6938,6 +7038,7 @@ export class FileSystemBackend implements StorageBackend {
     chunkIndex,
     input,
     immutable,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -6948,6 +7049,7 @@ export class FileSystemBackend implements StorageBackend {
     chunkIndex: number
     input: ResourceInput
     immutable?: true | ImmutableUnder
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<EtagValidator> {
@@ -6971,6 +7073,13 @@ export class FileSystemBackend implements StorageBackend {
     if (parent.live === undefined) {
       throw new ResourceNotFoundError({ requestName: 'Write Chunk' })
     }
+    // A parent the `OwnResourcesOnly` principals do not own refuses the
+    // write before the chunk's precondition, the write-once rule and any
+    // byte is written.
+    assertOwnsResource({
+      ownedBy,
+      createdBy: parent.live.sidecar.createdBy
+    })
 
     // Inside the chunk directory a chunk is a Resource keyed by its index, so the
     // Resource file / sidecar helpers apply with `chunkDir` as the collectionDir
@@ -7175,6 +7284,8 @@ export class FileSystemBackend implements StorageBackend {
    * @param options.resourceId {string}
    * @param options.chunkIndex {number}
    * @param [options.ifMatch] {string}   `If-Match` precondition (a quoted ETag)
+   * @param [options.ownedBy] {IDID[]}   the `OwnResourcesOnly` principals; a
+   *   live parent they do not own refuses the delete (`NotOwnResourceError`)
    * @returns {Promise<boolean>}
    */
   async deleteChunk({
@@ -7182,13 +7293,15 @@ export class FileSystemBackend implements StorageBackend {
     collectionId,
     resourceId,
     chunkIndex,
-    ifMatch
+    ifMatch,
+    ownedBy
   }: {
     spaceId: string
     collectionId: string
     resourceId: string
     chunkIndex: number
     ifMatch?: string
+    ownedBy?: IDID[]
   }): Promise<boolean> {
     const collectionDir = this.#collectionDir({ spaceId, collectionId })
     const chunkDir = this.#chunkDir({ collectionDir, resourceId })
@@ -7208,6 +7321,24 @@ export class FileSystemBackend implements StorageBackend {
               resourceId,
               discardUnswapped: false
             })
+            // A live parent the `OwnResourcesOnly` principals do not own
+            // refuses the delete before the chunk is looked up, so neither
+            // its absence nor its precondition answers. The parent is read
+            // only under such principals, and with no live parent the delete
+            // answers as it does without them.
+            if (ownedBy !== undefined && ownedBy.length > 0) {
+              const parent = await this.#readLiveFile({
+                collectionDir,
+                resourceId,
+                requestName: 'Delete Chunk'
+              })
+              if (parent.live !== undefined) {
+                assertOwnsResource({
+                  ownedBy,
+                  createdBy: parent.live.sidecar.createdBy
+                })
+              }
+            }
             // The chunk is found from its sidecar, as a read finds it. A
             // chunk file no live sidecar names is no chunk, and is left in
             // place.

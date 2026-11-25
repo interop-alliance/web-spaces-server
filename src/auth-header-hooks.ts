@@ -136,7 +136,29 @@ export function createdByOf({
   if (entries.length === 0) {
     return undefined
   }
-  const { serverUrl } = request.server
+  return delegationChainDids({ entries, serverUrl: request.server.serverUrl })
+}
+
+/**
+ * Narrows the controllers of a verified delegation chain to one DID each, in
+ * the same order. A controller given as a list of one DID is read as that
+ * DID. Resolves `undefined` when an entry names no single DID this server
+ * could have verified ({@link verifiableDidOf}), such as a list of any other
+ * length.
+ *
+ * @param options {object}
+ * @param options.entries {Array<string | string[] | undefined>}   the
+ *   controllers, in delegation order
+ * @param options.serverUrl {string}   this server's base URL
+ * @returns {IDID[] | undefined}
+ */
+export function delegationChainDids({
+  entries,
+  serverUrl
+}: {
+  entries: Array<string | string[] | undefined>
+  serverUrl: string
+}): IDID[] | undefined {
   const chain: IDID[] = []
   for (const entry of entries) {
     const controller =
@@ -171,7 +193,7 @@ export function createdByOf({
  * @param options.serverUrl {string}   this server's base URL
  * @returns {IDID | undefined}
  */
-function verifiableDidOf({
+export function verifiableDidOf({
   id,
   serverUrl
 }: {
