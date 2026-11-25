@@ -17,12 +17,19 @@ import { parseWriterIdHeader } from '../lib/writerAttribution.js'
 import { getCachedGovernedDescriptors } from '../lib/governedDescriptorsCache.js'
 import { collectionPath, linksetPath } from '../lib/paths.js'
 import { isImmutableCollection } from '../lib/revisions.js'
-import { CollectionNotFoundError, ResourceNotFoundError } from '../errors.js'
+import {
+  CollectionNotFoundError,
+  ResourceNotFoundError,
+  UnauthorizedError
+} from '../errors.js'
+import { ownsResource } from '../lib/ownResourcesOnly.js'
+import { policyGrantsRequest } from '../authorize.js'
 import { withStorageErrors } from '../lib/storageErrors.js'
 import type { VerifiedInvocation } from '../zcap.js'
 import type {
   ChunkMetadata,
   CollectionMetadata,
+  IDID,
   ImmutableUnder,
   ResourceMetadata,
   StorageBackend,
@@ -487,4 +494,299 @@ export async function readGatedOnParentResource<T>({
     throw companionResult.reason
   }
   return companionResult.value
+}
+
+/**
+ * Decides a read at a Resource URL, at its `meta` URL or at a chunk URL
+ * beneath it, for a request authorized under `OwnResourcesOnly` caveats. The
+ * Resource must list every principal in its `createdBy`. One that does not is
+ * still served when the Resource's access-control policy grants the read to
+ * everyone, since the caveat narrows the capability and a policy is a
+ * separate grant. Otherwise the request is refused as the masked `not-found`.
+ * An absent Resource is the 404 it is for any reader.
+ *
+ * With no principals the request carries no caveat to check, and nothing is
+ * read.
+ *
+ * A read the Resource's `createdBy` decided resolves an {@link OwnRead}. The
+ * handler checks the record it then serves against it
+ * ({@link assertOwnReadServed}), since the id may be deleted and created
+ * again by another party between the two reads. A read with no caveat, or
+ * one a policy granted, resolves `undefined`.
+ *
+ * @param options {object}
+ * @param options.request {FastifyRequest}   supplies the control plane and
+ *   the logger
+ * @param options.dataBackend {StorageBackend}   the Collection's data plane
+ * @param [options.ownResourcesOnly] {IDID[]}   the principals of the chain's
+ *   caveats, one per caveat
+ * @param options.spaceId {string}
+ * @param options.collectionId {string}
+ * @param options.resourceId {string}
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {Promise<OwnRead | undefined>}
+ */
+async function assertOwnResourceRead({
+  request,
+  dataBackend,
+  ownResourcesOnly,
+  spaceId,
+  collectionId,
+  resourceId,
+  requestName
+}: {
+  request: FastifyRequest
+  dataBackend: StorageBackend
+  ownResourcesOnly?: IDID[]
+  spaceId: string
+  collectionId: string
+  resourceId: string
+  requestName: string
+}): Promise<OwnRead | undefined> {
+  if (ownResourcesOnly === undefined) {
+    return undefined
+  }
+  const { createdBy, createdAt } = await getResourceMetadataOrThrow({
+    dataBackend,
+    spaceId,
+    collectionId,
+    resourceId,
+    requestName
+  })
+  if (ownsResource({ ownedBy: ownResourcesOnly, createdBy })) {
+    return { ownedBy: ownResourcesOnly, createdAt }
+  }
+  await assertPolicyGrantsRead({
+    request,
+    spaceId,
+    collectionId,
+    resourceId,
+    requestName
+  })
+  return undefined
+}
+
+/**
+ * What a read under `OwnResourcesOnly` caveats was decided from: the
+ * principals, and the `createdAt` of the Resource whose `createdBy` listed
+ * every one of them.
+ */
+export interface OwnRead {
+  ownedBy: IDID[]
+  createdAt?: string
+}
+
+/**
+ * Requires that the record a handler serves is the principals' own, for a
+ * read under `OwnResourcesOnly` caveats decided from an earlier read of the
+ * Resource. A Resource deleted and created again by another party keeps its
+ * id and generation and records a new `createdBy`, so the check reads the
+ * `createdBy` of the served record itself. A record that fails it is refused
+ * as the masked `not-found`. With no `ownRead` the read was not decided from
+ * a record, and it passes.
+ *
+ * @param options {object}
+ * @param [options.ownRead] {OwnRead}   what the read was decided from
+ * @param [options.createdBy] {unknown}   the served record's `createdBy`
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {void}
+ * @throws {UnauthorizedError}
+ */
+export function assertOwnReadServed({
+  ownRead,
+  createdBy,
+  requestName
+}: {
+  ownRead?: OwnRead
+  createdBy?: unknown
+  requestName: string
+}): void {
+  if (
+    ownRead !== undefined &&
+    !ownsResource({ ownedBy: ownRead.ownedBy, createdBy })
+  ) {
+    throw new UnauthorizedError({ requestName })
+  }
+}
+
+/**
+ * The same check for a read that serves a chunk or the chunk listing, whose
+ * record carries no `createdBy`. The parent Resource's Metadata is read again
+ * after the served read. It must still be the principals' own, with the
+ * `createdAt` the read was decided from. A chunk never outlives its parent,
+ * and a create over a tombstone records a new `createdAt`, so the chunk
+ * belonged to the Resource that was checked. With no `ownRead` nothing is
+ * read.
+ *
+ * @param options {object}
+ * @param [options.ownRead] {OwnRead}   what the read was decided from
+ * @param options.dataBackend {StorageBackend}   the Collection's data plane
+ * @param options.spaceId {string}
+ * @param options.collectionId {string}
+ * @param options.resourceId {string}
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {Promise<void>}
+ * @throws {UnauthorizedError}
+ */
+export async function assertOwnReadOfParentServed({
+  ownRead,
+  dataBackend,
+  spaceId,
+  collectionId,
+  resourceId,
+  requestName
+}: {
+  ownRead?: OwnRead
+  dataBackend: StorageBackend
+  spaceId: string
+  collectionId: string
+  resourceId: string
+  requestName: string
+}): Promise<void> {
+  if (ownRead === undefined) {
+    return
+  }
+  const parent = await withStorageErrors({ requestName }, () =>
+    dataBackend.getResourceMetadata({ spaceId, collectionId, resourceId })
+  )
+  if (!parent || parent.createdAt !== ownRead.createdAt) {
+    throw new UnauthorizedError({ requestName })
+  }
+  assertOwnReadServed({ ownRead, createdBy: parent.createdBy, requestName })
+}
+
+/**
+ * Requires that the target's effective access-control policy grants the read
+ * to everyone, for a read the request's capability does not reach under its
+ * `OwnResourcesOnly` caveat. Refuses with the masked `not-found` otherwise.
+ *
+ * @param options {object}
+ * @param options.request {FastifyRequest}   supplies the control plane and
+ *   the logger
+ * @param options.spaceId {string}
+ * @param options.collectionId {string}
+ * @param [options.resourceId] {string}   policy-resolution level
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {Promise<void>}
+ */
+export async function assertPolicyGrantsRead({
+  request,
+  spaceId,
+  collectionId,
+  resourceId,
+  requestName
+}: {
+  request: FastifyRequest
+  spaceId: string
+  collectionId: string
+  resourceId?: string
+  requestName: string
+}): Promise<void> {
+  const granted = await policyGrantsRequest({
+    request,
+    action: 'read',
+    spaceId,
+    collectionId,
+    resourceId
+  })
+  if (!granted) {
+    throw new UnauthorizedError({ requestName })
+  }
+}
+
+/**
+ * Refuses a write under `OwnResourcesOnly` caveats to a live Resource the
+ * principals did not create, ahead of a handler step that reads the stored
+ * Resource before the backend's own check. The backend still decides the
+ * write inside its critical section. An absent Resource passes, since a
+ * write there creates.
+ *
+ * @param options {object}
+ * @param options.dataBackend {StorageBackend}   the Collection's data plane
+ * @param [options.ownResourcesOnly] {IDID[]}   the principals of the chain's
+ *   caveats, one per caveat
+ * @param options.spaceId {string}
+ * @param options.collectionId {string}
+ * @param options.resourceId {string}
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {Promise<void>}
+ */
+export async function assertOwnResourceBeforeWrite({
+  dataBackend,
+  ownResourcesOnly,
+  spaceId,
+  collectionId,
+  resourceId,
+  requestName
+}: {
+  dataBackend: StorageBackend
+  ownResourcesOnly?: IDID[]
+  spaceId: string
+  collectionId: string
+  resourceId: string
+  requestName: string
+}): Promise<void> {
+  if (ownResourcesOnly === undefined) {
+    return
+  }
+  const metadata = await withStorageErrors({ requestName }, () =>
+    dataBackend.getResourceMetadata({ spaceId, collectionId, resourceId })
+  )
+  if (
+    metadata &&
+    !ownsResource({ ownedBy: ownResourcesOnly, createdBy: metadata.createdBy })
+  ) {
+    throw new UnauthorizedError({ requestName })
+  }
+}
+
+/**
+ * Resolves the data-plane backend of a Collection for a read at a Resource
+ * URL or at its `meta` URL, and decides the read for a request authorized
+ * under `OwnResourcesOnly` caveats ({@link assertOwnResourceRead}). The
+ * caller passes the resolved `ownRead` to {@link assertOwnReadServed} or
+ * {@link assertOwnReadOfParentServed} once it holds what it serves.
+ *
+ * @param options {object}
+ * @param options.request {FastifyRequest}   supplies the control plane and
+ *   the logger
+ * @param [options.ownResourcesOnly] {IDID[]}   the principals of the chain's
+ *   caveats, one per caveat
+ * @param options.spaceId {string}
+ * @param options.collectionId {string}
+ * @param options.resourceId {string}
+ * @param options.requestName {string}   request name used in error titles
+ * @returns {Promise<{ dataBackend: StorageBackend, ownRead?: OwnRead }>}
+ */
+export async function fetchBackendForResourceRead({
+  request,
+  ownResourcesOnly,
+  spaceId,
+  collectionId,
+  resourceId,
+  requestName
+}: {
+  request: FastifyRequest
+  ownResourcesOnly?: IDID[]
+  spaceId: string
+  collectionId: string
+  resourceId: string
+  requestName: string
+}): Promise<{ dataBackend: StorageBackend; ownRead?: OwnRead }> {
+  const { dataBackend } = await fetchCollectionAndBackend({
+    request,
+    spaceId,
+    collectionId,
+    requestName
+  })
+  const ownRead = await assertOwnResourceRead({
+    request,
+    dataBackend,
+    ownResourcesOnly,
+    spaceId,
+    collectionId,
+    resourceId,
+    requestName
+  })
+  return { dataBackend, ownRead }
 }

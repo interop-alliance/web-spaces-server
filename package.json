@@ -71,7 +71,7 @@
     "@interop/minimal-cipher": "^7.11.1",
     "@interop/security-document-loader": "^10.1.6",
     "@interop/space-archive": "^0.12.0",
-    "@interop/storage-core": "^0.47.0",
+    "@interop/storage-core": "^0.48.0",
     "@interop/x25519-key-agreement-key": "^5.4.3",
     "@interop/zcap": "^12.3.1",
     "@scure/base": "^2.4.0",

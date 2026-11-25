@@ -1014,6 +1014,22 @@ export class UnauthorizedError extends DenialError {
 }
 
 /**
+ * 404 -- a backend refused a write or a delete under an `OwnResourcesOnly`
+ * caveat, because the stored Resource's `createdBy` does not list every
+ * principal the request passed as `ownedBy`. A backend knows no request name,
+ * so `rethrowOrWrapStorageError` rethrows it as the `UnauthorizedError` of
+ * the request. The body a client reads is the masked `not-found`.
+ */
+export class NotOwnResourceError extends DenialError {
+  constructor() {
+    super({
+      type: ProblemTypes.NOT_FOUND,
+      detail: MASKED_NOT_FOUND_DETAIL
+    })
+  }
+}
+
+/**
  * 404 -- a capability in the invoked delegation chain has a stored
  * revocation. Only the `type` (`capability-revoked`) names the cause. Raised
  * only for the holder of the capability and its invoking key (`denialError`
@@ -1391,6 +1407,11 @@ export function rethrowOrWrapStorageError({
   err: unknown
   requestName?: string
 }): never {
+  // The backend's refusal carries no request name. The masked body must be
+  // the one every other refusal of this request carries.
+  if (err instanceof NotOwnResourceError) {
+    throw new UnauthorizedError({ requestName, cause: err })
+  }
   if (err instanceof ProblemError) {
     throw err
   }

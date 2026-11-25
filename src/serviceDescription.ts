@@ -60,6 +60,7 @@ import {
   WALLET_PROFILE_VERSION
 } from './config.default.js'
 import { asList } from './lib/chainCapability.js'
+import { SUPPORTED_CAVEAT_TYPES } from './lib/ownResourcesOnly.js'
 import { absoluteUrl, serviceDescriptionPath, spacesPath } from './lib/paths.js'
 import { resolveServerDid } from './lib/serverIdentity.js'
 import type {
@@ -253,7 +254,11 @@ function buildServiceDescription({
           url: AUTHZ_PROFILE_URL,
           signatureAlgorithms: INVOCATION_SIGNATURE_ALGORITHMS,
           zcapCryptosuites: delegationProofCryptosuites(),
-          features: [...AUTHZ_PROFILE_FEATURES]
+          features: [...AUTHZ_PROFILE_FEATURES],
+          // The member's presence claims that a chain carrying a caveat type
+          // the server does not understand is refused. Each value is a
+          // caveat type the server enforces.
+          zcapCaveats: [...SUPPORTED_CAVEAT_TYPES]
         } satisfies AuthzProfileVersionEntry
       ],
       [ENCRYPTED_COLLECTIONS_SPEC_ID]: [

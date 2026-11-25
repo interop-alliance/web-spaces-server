@@ -18,7 +18,8 @@ import type { FastifyRequest } from 'fastify'
 import { verifiedInvocation, verifyRequestZcap } from '../zcap.js'
 import type { VerifiedInvocation } from '../zcap.js'
 import type { ContainerRule } from '../lib/containerRule.js'
-import { authorize } from '../authorize.js'
+import type { OwnResourcesRule } from '../lib/ownResourcesOnly.js'
+import { authorize, type Authorization } from '../authorize.js'
 import { absoluteSpaceUrl, absoluteUrl } from '../lib/paths.js'
 import { isUrlSafeSegment } from '../lib/validateId.js'
 import {
@@ -179,7 +180,10 @@ async function fetchSpaceContext({
  *   the caller already read from storage directly (Read Space, which serves it
  *   and decides its 304 on the stored state rather than the per-process
  *   cache), so the prelude does not read it again
- * @returns {Promise<VerifiedSpaceContext & { grantedBy: 'capability' | 'policy' }>}
+ * @param [options.ownResources] {OwnResourcesRule}   how the route answers
+ *   a chain carrying the `OwnResourcesOnly` caveat; unset, the capability
+ *   path refuses it (see `handleZcapVerify`)
+ * @returns {Promise<VerifiedSpaceContext & Authorization>}
  */
 export async function fetchSpaceAndAuthorize({
   request,
@@ -189,7 +193,8 @@ export async function fetchSpaceAndAuthorize({
   targetPath,
   requestName,
   spaceMetadata,
-  allowTargetQuery = false
+  allowTargetQuery = false,
+  ownResources
 }: {
   request: FastifyRequest
   spaceId: string
@@ -205,7 +210,8 @@ export async function fetchSpaceAndAuthorize({
    * target rather than a different one. See `verifyZcap`.
    */
   allowTargetQuery?: boolean
-}): Promise<VerifiedSpaceContext & { grantedBy: 'capability' | 'policy' }> {
+  ownResources?: OwnResourcesRule
+}): Promise<VerifiedSpaceContext & Authorization> {
   const context = await fetchSpaceContext({
     request,
     spaceId,
@@ -213,7 +219,7 @@ export async function fetchSpaceAndAuthorize({
     requestName,
     spaceMetadata
   })
-  const grantedBy = await authorize({
+  const authorization = await authorize({
     request,
     allowedTarget: context.allowedTarget,
     spaceId,
@@ -223,9 +229,10 @@ export async function fetchSpaceAndAuthorize({
     requestName,
     allowTargetQuery,
     attenuatedRootTarget: context.spaceRootTarget,
-    admitDidUrlRoot: true
+    admitDidUrlRoot: true,
+    ownResources
   })
-  return { ...context, grantedBy }
+  return { ...context, ...authorization }
 }
 
 /**
@@ -254,6 +261,9 @@ export async function fetchSpaceAndAuthorize({
  *   the request URL that extend `targetPath` (e.g. Get Policy's
  *   `?include=deleted`), so a controller's root invocation of the
  *   query-bearing URL verifies (see `verifyZcap`)
+ * @param [options.ownResources] {OwnResourcesRule}   how the route answers
+ *   a chain carrying the `OwnResourcesOnly` caveat; unset, it is refused
+ *   (see `handleZcapVerify`)
  * @returns {Promise<VerifiedSpaceContext & VerifiedInvocation>}   the context,
  *   plus the verified invocation's facts: whether it was of the Space's root
  *   capability itself rather than a delegated chain (`rootInvocation`), who
@@ -265,7 +275,8 @@ export async function fetchSpaceAndVerify({
   targetPath,
   requestName,
   containerRule,
-  allowTargetQuery = false
+  allowTargetQuery = false,
+  ownResources
 }: {
   request: FastifyRequest
   spaceId: string
@@ -273,6 +284,7 @@ export async function fetchSpaceAndVerify({
   requestName: string
   containerRule?: ContainerRule
   allowTargetQuery?: boolean
+  ownResources?: OwnResourcesRule
 }): Promise<VerifiedSpaceContext & VerifiedInvocation> {
   const context = await fetchSpaceContext({
     request,
@@ -290,7 +302,8 @@ export async function fetchSpaceAndVerify({
     admitDidUrlRoot: true,
     allowTargetQuery,
     revocation: { storage: request.server.storage, scope: { spaceId } },
-    containerRule
+    containerRule,
+    ownResources
   })
   return { ...context, ...verifiedInvocation({ result }) }
 }

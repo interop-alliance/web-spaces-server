@@ -304,3 +304,106 @@ Two answers stay `missing-authorization` (401). Create Space at the Spaces
 Repository keeps it, since the repository's existence is not sensitive. The
 `/kms` group keeps it on every method a route implements: it is the WebKMS
 protocol, and the 401 is the same for an existing and an absent keystore.
+
+## Capability caveats
+
+A capability may carry a `caveat` member, one object or an array of objects,
+each with a non-empty string `type`. The server understands one type,
+`OwnResourcesOnly`. A chain carrying any other type is refused on every route
+family, `/kms` included. The decision is
+[0008](../decisions/0008-capability-caveats-and-own-resources-only.md).
+
+### What the verifier checks
+
+The caveat handler (`ownResourcesCaveats` in `src/lib/ownResourcesOnly.ts`)
+refuses the chain in four cases.
+
+- The route names no rule for the caveat.
+- The caveat object has a member besides `type`.
+- The capability carrying it is not signed with `eddsa-jcs-2022`.
+- That capability has no single controller the server could have verified.
+
+The other links of the chain may use either accepted proof suite.
+
+A route verification (`handleZcapVerify`) adds a fifth case, on every route. A
+chain carrying the caveat is refused when any delegated capability in it has no
+single controller the server could have verified. A create under such a chain
+would record no `createdBy`, so the Resource would be no one's own and its
+creator could not reach it again. A revocation submission is not a route
+verification, so such a grant can still be revoked.
+
+The principal of a caveat is the controller of the capability that carries it. A
+chain with two caveats has two principals. A Resource is the principals' own
+when every one of them appears in its `createdBy` list. A Resource with no
+`createdBy` is no one's own.
+
+### The route rules
+
+A route passes an `ownResources` rule to `handleZcapVerify`, through
+`fetchSpaceAndVerify` or `fetchSpaceAndAuthorize`. A route that passes none
+refuses a chain carrying the caveat. There are three rules.
+
+- `unaffected`: the capability decides the request as if it carried no caveat.
+  The routes are Create Resource by `POST`, the reads of the Collection
+  Metadata, the governing history log, the Collection `linkset` and the
+  Collection `backend`, the reads of the Space Metadata, the Space listing, the
+  Space `linkset` and the Space `backends`, and a revocation submission in a
+  Space. A submission applies the rule to the submitted chain and to the
+  invoking one.
+- `resource`: a request at a Resource URL, at its `meta` URL or at a chunk URL
+  beneath it. The routes are Resource `GET`, `HEAD`, `PUT` and `DELETE`,
+  Resource `meta` `GET` and `PUT`, and chunk `GET`, `HEAD`, `PUT` and `DELETE`
+  and the chunk listing. The verification hands back the principals.
+- `listing`: the Collection listing. The verification hands back the principals.
+
+Every other route refuses the chain. That covers a query, the `changes` feed,
+the quota reports, the replicas routes, Export and Import Space, the policy
+routes, and every unsafe method at a container.
+
+### Where a request is decided
+
+A write or a delete at a `resource` route passes the principals to the backend
+as `ownedBy`. The backend decides it inside the write's critical section, from
+the stored record, before the preconditions and the write-once rule. A Resource
+the principals do not own raises `NotOwnResourceError`. The backend knows no
+request name, so `rethrowOrWrapStorageError` rethrows it as the request's own
+`UnauthorizedError`. A write at an absent Resource id creates, and passes. A
+delete is checked against the record it finds, a live Resource or a tombstone. A
+delete at an absent id is refused, so the answer does not tell an absent id from
+another party's Resource. A repeat delete of the principal's own Resource
+answers 204.
+
+A read at a `resource` route is decided by the handler (`assertOwnResourceRead`
+in `src/requests/collectionContext.ts`). It reads the Resource Metadata and
+checks `createdBy`. A Resource the principals do not own is still served when
+its effective access-control policy grants the read to everyone. A policy is a
+separate grant, so the caveat does not narrow it. An absent Resource is the 404
+it is for any reader.
+
+That check runs before the read the handler serves, and reads take no lock. The
+id may be deleted and created again by another party in between, and a
+re-created Resource keeps its generation. So the handler checks the served
+record too (`assertOwnReadServed`). Get Resource checks the `createdBy` that
+`getResource` returns beside the stream. Head Resource and the `meta` read check
+the Metadata they serve. A chunk read and the chunk listing read the parent's
+Metadata again after the served read, and require the same `createdAt` and an
+owned `createdBy` (`assertOwnReadOfParentServed`).
+
+The Collection listing passes `ownedBy` to the backend. The listing holds only
+the principals' own Resources, and `totalItems` counts only those. A listing
+with a `filter[...]` equality parameter is a query. Under the caveat it is
+served only when the Collection's policy grants the read to everyone.
+
+The plain listing stays filtered on a Collection with a public-read policy. The
+filter is what the caveat grant's listing means, and it is how a guest finds its
+own Resources there. The same request sent with no authorization headers lists
+every Resource under the policy.
+
+Both backends enforce `ownedBy`, and each lists `OwnResourcesOnly` in its
+`enforcedCaveats`. The plugin refuses to start with a backend that does not.
+
+### The refusal
+
+Every refusal is the masked `not-found`, with the body and status of any other
+under-authorized request. See [The masked not-found](#the-masked-not-found). A
+chain refused over a caveat names no cause in its `type`.

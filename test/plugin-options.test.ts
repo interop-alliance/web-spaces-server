@@ -36,6 +36,13 @@ class UnsettledBackend extends LifecycleSpyBackend {
   }
 }
 
+/**
+ * A backend written before capability caveats, which enforces none.
+ */
+class NoCaveatBackend extends LifecycleSpyBackend {
+  readonly enforcedCaveats: string[] = []
+}
+
 let dataDir: string
 
 beforeAll(async () => {
@@ -270,6 +277,25 @@ describe('a backend with no origin id', () => {
       'A storage backend carries no origin id.'
     )
     // Closing an app whose boot failed reports the boot error again.
+    await app.close().catch(() => {})
+    expect(backend.closeCalls).toBe(1)
+  })
+})
+
+describe('a backend that does not enforce an advertised caveat', () => {
+  it('is refused at registration, and still closed with the app', async () => {
+    const backend = await NoCaveatBackend.open({
+      dataDir: path.join(dataDir, 'no-caveat')
+    })
+    const app = createApp({
+      serverUrl: 'http://localhost',
+      backend,
+      logger: false
+    })
+    await expect(app.ready()).rejects.toThrow(
+      'The storage backend "fs" does not enforce the capability caveat ' +
+        'OwnResourcesOnly.'
+    )
     await app.close().catch(() => {})
     expect(backend.closeCalls).toBe(1)
   })

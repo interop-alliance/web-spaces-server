@@ -55,6 +55,7 @@ import {
   // error) is the one this module throws; the library's is the cause it
   // recognizes by name.
   CapabilityExpiredError as ZcapCapabilityExpiredError,
+  type CaveatHandler,
   type InspectCapabilityChain
 } from '@interop/zcap'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
@@ -79,6 +80,12 @@ import {
   revocationChainInspector
 } from './lib/revocations.js'
 import { capabilityControllers } from './lib/chainCapability.js'
+import {
+  caveatChainRecordsCreators,
+  ownResourcesCaveats,
+  ownResourcesPrincipals,
+  type OwnResourcesRule
+} from './lib/ownResourcesOnly.js'
 import {
   clientAnnexChainInspector,
   composeChainInspectors
@@ -1021,10 +1028,13 @@ function verifiedRootInvocation({
  * the library's result, plus `dereferencedTarget` when the chain roots in a
  * DID URL. That is the URL the invoked capability's target dereferences to,
  * the one the request URL was compared against. It never reaches the wire or
- * a stored record.
+ * a stored record. `ownResourcesOnly` is set by `handleZcapVerify` when the
+ * chain carries `OwnResourcesOnly` caveats and the route's rule has the
+ * handler or the backend check them: the principals, one per caveat.
  */
 export type ZcapVerificationResult = VerifyCapabilityInvocationResult & {
   dereferencedTarget?: string
+  ownResourcesOnly?: IDID[]
 }
 
 /**
@@ -1047,6 +1057,10 @@ export type ZcapVerificationResult = VerifyCapabilityInvocationResult & {
  * that same `invocationTarget` for an https chain. The raw `invocationTarget`
  * is kept, since it is what was signed. A decision about which URLs the
  * invoked capability reaches reads `dereferencedTarget`.
+ * `ownResourcesOnly` is the principals of the chain's `OwnResourcesOnly`
+ * caveats, one per caveat, present only on a route whose rule is `resource`
+ * or `listing` (`lib/ownResourcesOnly.ts`). A handler that receives it must
+ * check each Resource it serves or writes against them.
  */
 export interface VerifiedInvocation {
   rootInvocation: boolean
@@ -1057,6 +1071,7 @@ export interface VerifiedInvocation {
   }
   dereferencedTarget?: string
   delegatedControllers: Array<string | string[]>
+  ownResourcesOnly?: IDID[]
 }
 
 /**
@@ -1088,7 +1103,10 @@ export function verifiedInvocation({
     // Index 0 is the root capability, whose controller is the scope's own.
     delegatedControllers: dereferencedChain
       .slice(1)
-      .map(link => link.controller)
+      .map(link => link.controller),
+    ...(result.ownResourcesOnly !== undefined && {
+      ownResourcesOnly: result.ownResourcesOnly
+    })
   }
 }
 
@@ -1162,6 +1180,10 @@ export function verifiedInvocation({
  *   stores no log for ({@link didUrlVerificationFor}). Unset, such a target
  *   is refused. Apart from `peerWebvh`, which lets a foreign `did:webvh`
  *   invoke
+ * @param [options.ownResources] {OwnResourcesRule}   how this route answers
+ *   a chain carrying the `OwnResourcesOnly` caveat
+ *   (`lib/ownResourcesOnly.ts`). Unset, such a chain is refused. A chain
+ *   with any other caveat type is refused on every route.
  * @returns {Promise<VerifyCapabilityInvocationResult>}   the successful
  *   verification result (callers needing the dereferenced chain, e.g. the
  *   per-key `maxCapabilityChainLength` gate, read it from here)
@@ -1186,7 +1208,8 @@ export async function handleZcapVerify({
   containerRule,
   peerWebvh,
   admitDidUrlRoot = false,
-  targetResolver
+  targetResolver,
+  ownResources
 }: {
   url: string
   allowedTarget: string
@@ -1209,6 +1232,7 @@ export async function handleZcapVerify({
   peerWebvh?: PeerWebvhResolver
   admitDidUrlRoot?: boolean
   targetResolver?: PeerWebvhResolver
+  ownResources?: OwnResourcesRule
 }): Promise<ZcapVerificationResult> {
   assertInvocationPresent({ headers, requestName })
   // The `controller-only` container rule turns on nothing but whether the
@@ -1315,6 +1339,12 @@ export async function handleZcapVerify({
   // The peer pre-pass. Without a grant a foreign did:webvh invoker with no
   // stored log stays unresolvable, and the verification below answers the
   // masked `not-found`.
+  // The caveat handlers, shared by the pre-pass and the verification below,
+  // so the pre-pass admits no chain the verification refuses over a caveat.
+  const supportedCaveats = ownResourcesCaveats({
+    rule: ownResources,
+    serverUrl
+  })
   const peerDid =
     peerWebvh !== undefined && webvh !== undefined
       ? await peerInvokerGrant({
@@ -1334,12 +1364,13 @@ export async function handleZcapVerify({
             }),
           didUrlRoot,
           inspectCapabilityChain: prePassInspector,
+          supportedCaveats,
           maxChainLength,
           maxDelegationTtl,
           logger
         })
       : undefined
-  return verifiedOrThrow({
+  const result = await verifiedOrThrow({
     verify: () =>
       verifyZcap({
         url,
@@ -1358,6 +1389,7 @@ export async function handleZcapVerify({
         attenuatedRootTarget,
         didUrl,
         inspectCapabilityChain,
+        supportedCaveats,
         maxChainLength,
         maxDelegationTtl
       }),
@@ -1367,6 +1399,27 @@ export async function handleZcapVerify({
     logger,
     mayNameCause: didUrlCauseGate({ invokedRoot, didUrl })
   })
+  // A chain carrying the caveat must be able to record who created a
+  // Resource, on every route, so a create under it is its creator's own.
+  if (
+    !caveatChainRecordsCreators({
+      caveats: result.caveats,
+      delegatedControllers: (result.dereferencedChain ?? [])
+        .slice(1)
+        .map(link => link.controller),
+      serverUrl
+    })
+  ) {
+    throw new UnauthorizedError({ requestName })
+  }
+  const ownResourcesOnly = ownResourcesPrincipals({
+    rule: ownResources,
+    caveats: result.caveats,
+    serverUrl
+  })
+  return ownResourcesOnly === undefined
+    ? result
+    : { ...result, ownResourcesOnly }
 }
 
 /**
@@ -1870,6 +1923,8 @@ type DelegationChainResult = {
  * @param [options.maxChainLength] {number}   max chain length, root included
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL (ms)
  * @param [options.inspectCapabilityChain] {InspectCapabilityChain}
+ * @param [options.supportedCaveats] {Map<string, CaveatHandler>}   the caveat
+ *   types the chain may carry; absent, a chain with any caveat is refused
  * @returns {Promise<DelegationChainResult>}
  */
 async function verifyDelegationChain({
@@ -1879,7 +1934,8 @@ async function verifyDelegationChain({
   allowTargetAttenuation,
   maxChainLength,
   maxDelegationTtl,
-  inspectCapabilityChain
+  inspectCapabilityChain,
+  supportedCaveats
 }: {
   capability: object
   documentLoader: IDocumentLoader
@@ -1888,6 +1944,7 @@ async function verifyDelegationChain({
   maxChainLength?: number
   maxDelegationTtl?: number
   inspectCapabilityChain?: InspectCapabilityChain
+  supportedCaveats?: Map<string, CaveatHandler>
 }): Promise<DelegationChainResult> {
   const suite = delegationProofSuites()
   return (await jsigs.verify(capability, {
@@ -1899,7 +1956,8 @@ async function verifyDelegationChain({
       allowTargetAttenuation,
       maxChainLength,
       maxDelegationTtl,
-      inspectCapabilityChain
+      inspectCapabilityChain,
+      supportedCaveats
     })
   })) as DelegationChainResult
 }
@@ -2011,6 +2069,8 @@ function expectedRoots({
  *   own verification admitted, which the loader may then synthesize
  * @param [options.inspectCapabilityChain] {InspectCapabilityChain}   the
  *   invocation's chain inspectors
+ * @param [options.supportedCaveats] {Map<string, CaveatHandler>}   the caveat
+ *   types the chain may carry; absent, a chain with any caveat is refused
  * @param [options.maxChainLength] {number}   max chain length, root included
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL (ms)
  * @param options.logger {ZcapLogger}   logs a refused chain at debug
@@ -2026,6 +2086,7 @@ async function peerInvokerGrant({
   rootsFor,
   didUrlRoot,
   inspectCapabilityChain,
+  supportedCaveats,
   maxChainLength,
   maxDelegationTtl,
   logger
@@ -2038,6 +2099,7 @@ async function peerInvokerGrant({
   rootsFor: () => { rootCapabilities: string[]; attenuates: boolean }
   didUrlRoot?: string
   inspectCapabilityChain?: InspectCapabilityChain
+  supportedCaveats?: Map<string, CaveatHandler>
   maxChainLength?: number
   maxDelegationTtl?: number
   logger: ZcapLogger
@@ -2098,7 +2160,8 @@ async function peerInvokerGrant({
       allowTargetAttenuation: expected.attenuates,
       maxChainLength,
       maxDelegationTtl,
-      inspectCapabilityChain
+      inspectCapabilityChain,
+      supportedCaveats
     })
   } catch (err) {
     result = { verified: false, error: err as Error }
@@ -2189,6 +2252,8 @@ async function peerInvokerGrant({
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL in
  *   milliseconds, measured `expires` minus the delegation proof's `created`
  *   (the `/kms` families pass `KMS_MAX_DELEGATION_TTL`; absent, unbounded)
+ * @param [options.supportedCaveats] {Map<string, CaveatHandler>}   the caveat
+ *   types the chain may carry; absent, a chain with any caveat is refused
  * @returns {Promise<VerifyCapabilityInvocationResult>}
  */
 export async function verifyZcap({
@@ -2205,6 +2270,7 @@ export async function verifyZcap({
   attenuatedRootTarget,
   didUrl,
   inspectCapabilityChain,
+  supportedCaveats,
   maxChainLength,
   maxDelegationTtl
 }: {
@@ -2221,6 +2287,7 @@ export async function verifyZcap({
   attenuatedRootTarget?: string
   didUrl?: DidUrlVerification
   inspectCapabilityChain?: InspectCapabilityChain
+  supportedCaveats?: Map<string, CaveatHandler>
   maxChainLength?: number
   maxDelegationTtl?: number
 }): Promise<ZcapVerificationResult> {
@@ -2293,6 +2360,7 @@ export async function verifyZcap({
     getVerifier: createGetVerifier({ webvh }),
     didUrl,
     inspectCapabilityChain,
+    supportedCaveats,
     maxChainLength,
     maxDelegationTtl,
     suite: delegationProofSuites()
@@ -2479,6 +2547,8 @@ function submittedChainRoot({
  *   here. A caller that must bound the submission by where the root
  *   dereferences to reads `didUrlRoot` off the result
  *   ({@link handleRevocationInvocationVerify})
+ * @param [options.supportedCaveats] {Map<string, CaveatHandler>}   the caveat
+ *   types the chain may carry; absent, a chain with any caveat is refused
  * @returns {Promise<{ delegator: string, chainControllers: string[],
  *   capabilities: CapabilitySummary[], didUrlRoot?: string }>}   the
  *   capability's delegator (its delegation proof's controller), every
@@ -2494,7 +2564,8 @@ export async function verifyRevocationChain({
   webvh,
   maxChainLength,
   maxDelegationTtl,
-  admitDidUrlRoot = false
+  admitDidUrlRoot = false,
+  supportedCaveats
 }: {
   capability: Record<string, unknown>
   rootTarget: string
@@ -2503,6 +2574,7 @@ export async function verifyRevocationChain({
   maxChainLength?: number
   maxDelegationTtl?: number
   admitDidUrlRoot?: boolean
+  supportedCaveats?: Map<string, CaveatHandler>
 }): Promise<{
   delegator: string
   chainControllers: string[]
@@ -2557,7 +2629,8 @@ export async function verifyRevocationChain({
       }
       capabilities = capabilitySummaries(details)
       return { valid: true }
-    }
+    },
+    supportedCaveats
   })
   if (!result.verified) {
     // A server-side fault met under the document loader (a storage error
@@ -2730,6 +2803,8 @@ export async function verifyOneLinkDelegation({
  * @param [options.maxDelegationTtl] {number}   max delegated-zcap TTL (ms)
  * @param [options.requestName] {string}   request name used in error titles
  * @param options.logger {ZcapLogger}   logger for verification errors
+ * @param [options.supportedCaveats] {Map<string, CaveatHandler>}   the caveat
+ *   types the chain may carry; absent, a chain with any caveat is refused
  * @returns {Promise<void>}
  */
 export async function handleRevocationInvocationVerify({
@@ -2746,6 +2821,7 @@ export async function handleRevocationInvocationVerify({
   admitDidUrlRoot = false,
   submittedDidUrlRoot,
   targetResolver,
+  supportedCaveats,
   maxChainLength,
   maxDelegationTtl,
   requestName = '',
@@ -2764,6 +2840,7 @@ export async function handleRevocationInvocationVerify({
   admitDidUrlRoot?: boolean
   submittedDidUrlRoot?: string
   targetResolver?: PeerWebvhResolver
+  supportedCaveats?: Map<string, CaveatHandler>
   maxChainLength?: number
   maxDelegationTtl?: number
   requestName?: string
@@ -2831,6 +2908,7 @@ export async function handleRevocationInvocationVerify({
         getVerifier: createGetVerifier({ webvh }),
         didUrl,
         inspectCapabilityChain,
+        supportedCaveats,
         maxChainLength,
         maxDelegationTtl,
         suite: delegationProofSuites()

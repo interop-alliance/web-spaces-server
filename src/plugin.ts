@@ -38,6 +38,7 @@ import {
 } from './config.default.js'
 import { defaultBackend as openFallbackBackend } from './storage.js'
 import { ServerBackends } from './lib/serverBackends.js'
+import { SUPPORTED_CAVEAT_TYPES } from './lib/ownResourcesOnly.js'
 import { bufferedBodyLimit } from './lib/bodyLimit.js'
 import { onboardingTokenAuthorizer } from './provisioning.js'
 import {
@@ -425,6 +426,21 @@ async function wasPlugin(
       throw new Error(
         'A storage backend carries no origin id. Obtain the backend from ' +
           'its async open() factory before injecting it.'
+      )
+    }
+  }
+  // A write, a delete and a listing under a capability caveat are decided by
+  // the backend. One that does not enforce a caveat type `/service`
+  // advertises would serve such a grant as if it carried no caveat.
+  for (const backend of opened) {
+    const missing = SUPPORTED_CAVEAT_TYPES.filter(
+      type => !backend.enforcedCaveats?.includes(type)
+    )
+    if (missing.length > 0) {
+      throw new Error(
+        `The storage backend "${backend.describe().id}" does not enforce ` +
+          `the capability caveat ${missing.join(', ')}. List each caveat ` +
+          'type the backend enforces in its `enforcedCaveats`.'
       )
     }
   }

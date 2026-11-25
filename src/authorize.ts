@@ -16,7 +16,61 @@ import {
   type AccessAction
 } from './policy.js'
 import { UnauthorizedError } from './errors.js'
+import type { OwnResourcesRule } from './lib/ownResourcesOnly.js'
 import type { IDID } from './types.js'
+
+/**
+ * What granted a request. `ownResourcesOnly` is present when a capability
+ * granted it and the chain carries `OwnResourcesOnly` caveats the handler
+ * must check: the principals, one per caveat (see `VerifiedInvocation`).
+ */
+export interface Authorization {
+  grantedBy: 'capability' | 'policy'
+  ownResourcesOnly?: IDID[]
+}
+
+/**
+ * Whether the target's effective access-control policy grants the action to
+ * everyone. A grant is logged, so a request allowed purely by a policy is
+ * auditable.
+ *
+ * @param options {object}
+ * @param options.request {FastifyRequest}   supplies the control plane and
+ *   the logger
+ * @param options.action {AccessAction}
+ * @param options.spaceId {string}
+ * @param [options.collectionId] {string}   policy-resolution level
+ * @param [options.resourceId] {string}   policy-resolution level
+ * @returns {Promise<boolean>}
+ */
+export async function policyGrantsRequest({
+  request,
+  action,
+  spaceId,
+  collectionId,
+  resourceId
+}: {
+  request: FastifyRequest
+  action: AccessAction
+  spaceId: string
+  collectionId?: string
+  resourceId?: string
+}): Promise<boolean> {
+  const policy = await resolveEffectivePolicy({
+    storage: request.server.storage,
+    spaceId,
+    collectionId,
+    resourceId
+  })
+  if (!policyGrants({ policy, action, logger: request.log })) {
+    return false
+  }
+  request.log.info(
+    { spaceId, collectionId, resourceId, action, policyType: policy?.type },
+    'Access granted by access-control policy.'
+  )
+  return true
+}
 
 /**
  * Authorizes a request against a target, by capability invocation first and the
@@ -41,9 +95,11 @@ import type { IDID } from './types.js'
  *   chain attenuating down to the request URL (see `verifyZcap`)
  * @param [options.admitDidUrlRoot] {boolean}   admit a chain rooted in a DID
  *   URL under the Space `attenuatedRootTarget` names (see `handleZcapVerify`)
- * @returns {Promise<'capability' | 'policy'>}   resolves when authorized,
- *   naming what granted the request: a verified capability invocation, or
- *   the access-control policy fallback; throws otherwise
+ * @param [options.ownResources] {OwnResourcesRule}   how the route answers a
+ *   chain carrying the `OwnResourcesOnly` caveat (see `handleZcapVerify`)
+ * @returns {Promise<Authorization>}   resolves when authorized, naming what
+ *   granted the request: a verified capability invocation, or the
+ *   access-control policy fallback; throws otherwise
  */
 export async function authorize({
   request,
@@ -55,7 +111,8 @@ export async function authorize({
   requestName = '',
   allowTargetQuery = false,
   attenuatedRootTarget,
-  admitDidUrlRoot = false
+  admitDidUrlRoot = false,
+  ownResources
 }: {
   request: FastifyRequest
   allowedTarget: string
@@ -67,7 +124,8 @@ export async function authorize({
   allowTargetQuery?: boolean
   attenuatedRootTarget?: string
   admitDidUrlRoot?: boolean
-}): Promise<'capability' | 'policy'> {
+  ownResources?: OwnResourcesRule
+}): Promise<Authorization> {
   const { method } = request
   const { storage } = request.server
   const action: AccessAction = isSafeMethod(method) ? 'read' : 'write'
@@ -81,7 +139,7 @@ export async function authorize({
   let zcapError: Error | undefined
   if (hasAuthHeaders(request)) {
     try {
-      await verifyRequestZcap({
+      const { ownResourcesOnly } = await verifyRequestZcap({
         request,
         peerWebvh: true,
         allowedTarget,
@@ -90,29 +148,29 @@ export async function authorize({
         allowTargetQuery,
         attenuatedRootTarget,
         admitDidUrlRoot,
+        ownResources,
         revocation: { storage, scope: { spaceId } }
       })
-      return 'capability'
+      return {
+        grantedBy: 'capability',
+        ...(ownResourcesOnly !== undefined && { ownResourcesOnly })
+      }
     } catch (err) {
       zcapError = err as Error
     }
   }
 
   // 2. Fall back to the target's effective access-control policy.
-  const policy = await resolveEffectivePolicy({
-    storage,
-    spaceId,
-    collectionId,
-    resourceId
-  })
-  if (policyGrants({ policy, action, logger: request.log })) {
-    // Log granted public-access decisions so they are auditable (an anonymous
-    // or otherwise-unauthorized read allowed purely by a policy).
-    request.log.info(
-      { spaceId, collectionId, resourceId, action, policyType: policy?.type },
-      'Access granted by access-control policy.'
-    )
-    return 'policy'
+  if (
+    await policyGrantsRequest({
+      request,
+      action,
+      spaceId,
+      collectionId,
+      resourceId
+    })
+  ) {
+    return { grantedBy: 'policy' }
   }
 
   // Neither a capability nor a policy authorizes this request. Re-throw the

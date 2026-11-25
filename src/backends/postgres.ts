@@ -48,6 +48,10 @@ import {
   KeyIdConflictError,
   DuplicateRevocationError
 } from '../errors.js'
+import {
+  OWN_RESOURCES_ONLY,
+  assertOwnsResource
+} from '../lib/ownResourcesOnly.js'
 import { isJsonContentType } from '@interop/storage-core'
 import { applyMigrations, writeClockHighWater } from './postgresSchema.js'
 import {
@@ -303,6 +307,30 @@ function pgErrorCode(err: unknown): string | undefined {
  */
 function collectionQuotaExceeded(limit: number): CountQuotaExceededError {
   return new CountQuotaExceededError({ scope: 'Collections per Space', limit })
+}
+
+/**
+ * Refuses a request under `OwnResourcesOnly` caveats at a live Resource the
+ * principals do not own. An absent row or a tombstone passes, as does an
+ * absent or empty `ownedBy`. The caller reads `row` inside its transaction,
+ * under the Space row lock every Resource-level write takes first.
+ * @param options {object}
+ * @param [options.ownedBy] {IDID[]}   the principals, one per caveat
+ * @param [options.row] {object}   the Resource row's `deleted` and
+ *   `created_by` columns, or `undefined` when no row names the Resource
+ * @returns {void}
+ * @throws {NotOwnResourceError}
+ */
+function assertOwnsLiveRow({
+  ownedBy,
+  row
+}: {
+  ownedBy?: IDID[]
+  row?: { deleted: boolean; created_by: IDID[] | null }
+}): void {
+  if (row !== undefined && !row.deleted) {
+    assertOwnsResource({ ownedBy, createdBy: row.created_by })
+  }
 }
 
 /**
@@ -1162,6 +1190,12 @@ export class PostgresBackend implements StorageBackend {
   get originId(): string {
     return this.#originId
   }
+
+  /**
+   * The caveat types this backend enforces (see
+   * `StorageBackend.enforcedCaveats`).
+   */
+  readonly enforcedCaveats = [OWN_RESOURCES_ONLY]
 
   /**
    * The store's hybrid logical clock (see `#clock`).
@@ -2916,6 +2950,9 @@ export class PostgresBackend implements StorageBackend {
    * @param [options.limit] {number}
    * @param [options.cursor] {string}
    * @param [options.collectionMetadata] {CollectionMetadata}
+   * @param [options.ownedBy] {IDID[]}   the principals of the
+   *   `OwnResourcesOnly` caveats; non-empty, only the Resources whose
+   *   `createdBy` lists every one are listed and counted
    * @returns {Promise<CollectionResourcesList>}
    */
   async listCollectionItems({
@@ -2923,13 +2960,15 @@ export class PostgresBackend implements StorageBackend {
     collectionId,
     limit,
     cursor,
-    collectionMetadata: providedMetadata
+    collectionMetadata: providedMetadata,
+    ownedBy
   }: {
     spaceId: string
     collectionId: string
     limit?: number
     cursor?: string
     collectionMetadata?: CollectionMetadata
+    ownedBy?: IDID[]
   }): Promise<CollectionResourcesList> {
     const collectionMetadata =
       providedMetadata ??
@@ -2938,31 +2977,61 @@ export class PostgresBackend implements StorageBackend {
     const after = cursor !== undefined ? decodeCursor(cursor).after : undefined
     const pageSize = resolvePageSize(limit)
 
+    type ItemRow = {
+      resource_id: string
+      content_type: string
+      custom: ResourceMetadataCustom | null
+      epoch: string | null
+      writer_id: string | null
+    }
     // The total count and the page itself are independent reads: issue both on
     // the pool at once rather than paying the two round trips serially.
-    const [{ rows: countRows }, { rows }] = await Promise.all([
-      this.#reader().query<{ total: string }>(
-        `SELECT COUNT(*) AS total FROM resources
+    // Take `pageSize + 1` from the seek point to detect a further page without
+    // a second query; `hasMore` is whether the extra row arrived.
+    let reads: [
+      Promise<pg.QueryResult<{ total: string }>>,
+      Promise<pg.QueryResult<ItemRow>>
+    ]
+    if (ownedBy !== undefined && ownedBy.length > 0) {
+      // The `OwnResourcesOnly` filter. `created_by @> $n` holds when the
+      // stored list holds every principal, as `ownsResource` decides, and is
+      // NULL for a row with no `createdBy`, which leaves the row out. The
+      // count, the seek and the extra row all run over the filtered set.
+      reads = [
+        this.#reader().query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM resources
+          WHERE space_id = $1 AND collection_id = $2 AND NOT deleted
+            AND created_by @> $3::text[]`,
+          [spaceId, collectionId, ownedBy]
+        ),
+        this.#reader().query<ItemRow>(
+          `SELECT resource_id, content_type, custom, epoch, writer_id FROM resources
+          WHERE space_id = $1 AND collection_id = $2 AND NOT deleted
+            AND created_by @> $5::text[]
+            AND ($3::text IS NULL OR resource_id > $3)
+          ORDER BY resource_id
+          LIMIT $4`,
+          [spaceId, collectionId, after ?? null, pageSize + 1, ownedBy]
+        )
+      ]
+    } else {
+      reads = [
+        this.#reader().query<{ total: string }>(
+          `SELECT COUNT(*) AS total FROM resources
         WHERE space_id = $1 AND collection_id = $2 AND NOT deleted`,
-        [spaceId, collectionId]
-      ),
-      // Take `pageSize + 1` from the seek point to detect a further page without
-      // a second query; `hasMore` is whether the extra row arrived.
-      this.#reader().query<{
-        resource_id: string
-        content_type: string
-        custom: ResourceMetadataCustom | null
-        epoch: string | null
-        writer_id: string | null
-      }>(
-        `SELECT resource_id, content_type, custom, epoch, writer_id FROM resources
+          [spaceId, collectionId]
+        ),
+        this.#reader().query<ItemRow>(
+          `SELECT resource_id, content_type, custom, epoch, writer_id FROM resources
         WHERE space_id = $1 AND collection_id = $2 AND NOT deleted
           AND ($3::text IS NULL OR resource_id > $3)
         ORDER BY resource_id
         LIMIT $4`,
-        [spaceId, collectionId, after ?? null, pageSize + 1]
-      )
-    ])
+          [spaceId, collectionId, after ?? null, pageSize + 1]
+        )
+      ]
+    }
+    const [{ rows: countRows }, { rows }] = await Promise.all(reads)
     const totalItems = Number(countRows[0]?.total ?? 0)
     const hasMore = rows.length > pageSize
     const pageRows = hasMore ? rows.slice(0, pageSize) : rows
@@ -3013,6 +3082,9 @@ export class PostgresBackend implements StorageBackend {
    * @param [options.createdBy] {IDID[]}   the invocation's delegation
    *   chain, recorded as the Resource's `createdBy` by the write that
    *   creates it (over a tombstone included)
+   * @param [options.ownedBy] {IDID[]}   the principals of the
+   *   `OwnResourcesOnly` caveats, checked against a live Resource's
+   *   `createdBy` before the preconditions and the write-once rule
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
    * @returns {Promise<ResourceWriteResult>}   the Resource's new content
@@ -3028,6 +3100,7 @@ export class PostgresBackend implements StorageBackend {
     epoch,
     writerId,
     immutable,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -3039,6 +3112,7 @@ export class PostgresBackend implements StorageBackend {
     epoch?: string
     writerId?: string
     immutable?: true | ImmutableUnder
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceWriteResult> {
@@ -3056,6 +3130,17 @@ export class PostgresBackend implements StorageBackend {
         spaceId,
         collectionId,
         requestName: 'Write Resource'
+      })
+
+      // The `OwnResourcesOnly` caveats, decided before anything below reads
+      // the stored row: a caller who does not own the Resource learns nothing
+      // from the write-once rule, a unique claim, or a precondition.
+      await this.#assertOwnsResource({
+        client,
+        spaceId,
+        collectionId,
+        resourceId,
+        ownedBy
       })
 
       // A write-once Collection: over a live Resource or a tombstone, only a
@@ -3477,7 +3562,7 @@ export class PostgresBackend implements StorageBackend {
   }): Promise<ResourceResult> {
     const { rows } = await this.#reader().query<ResourceRow>(
       `SELECT content_type, content, generation, updated_at,
-              updated_at_counter, origin_id, deleted
+              updated_at_counter, origin_id, deleted, created_by
          FROM resources
         WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3`,
       [spaceId, collectionId, resourceId]
@@ -3490,7 +3575,8 @@ export class PostgresBackend implements StorageBackend {
       resourceStream: Readable.from(row.content),
       storedResourceType: row.content_type,
       generation: row.generation,
-      ...stampOfRow(row)
+      ...stampOfRow(row),
+      ...(row.created_by !== null && { createdBy: row.created_by })
     }
   }
 
@@ -3511,6 +3597,9 @@ export class PostgresBackend implements StorageBackend {
    * @param options.spaceId {string}
    * @param options.collectionId {string}
    * @param options.resourceId {string}
+   * @param [options.ownedBy] {IDID[]}   the principals of the
+   *   `OwnResourcesOnly` caveats, checked against a live Resource's
+   *   `createdBy` before the preconditions and the write-once rule
    * @param [options.ifMatch] {string}
    * @returns {Promise<void>}
    */
@@ -3519,13 +3608,15 @@ export class PostgresBackend implements StorageBackend {
     collectionId,
     resourceId,
     ifMatch,
-    writerId
+    writerId,
+    ownedBy
   }: {
     spaceId: string
     collectionId: string
     resourceId: string
     ifMatch?: string
     writerId?: string
+    ownedBy?: IDID[]
   }): Promise<void> {
     await this.#withTransaction(async client => {
       // First lock of the backend-wide order (`#lockSpaceRow`).
@@ -3546,16 +3637,24 @@ export class PostgresBackend implements StorageBackend {
       // that is about to be dropped anyway.
       const { rows } = await client.query<
         StampColumns &
-          Pick<ResourceRow, 'generation' | 'size_bytes' | 'deleted'>
+          Pick<
+            ResourceRow,
+            'generation' | 'size_bytes' | 'deleted' | 'created_by'
+          >
       >(
         `SELECT generation, updated_at, updated_at_counter, origin_id,
-                size_bytes, deleted
+                size_bytes, deleted, created_by
            FROM resources
           WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3
           FOR UPDATE`,
         [spaceId, collectionId, resourceId]
       )
       const prior = rows[0]
+      // The `OwnResourcesOnly` caveats, decided from the locked row before
+      // the precondition. The row, live or a tombstone, must list the
+      // principals in `created_by`. An absent row is refused too, so the
+      // answer does not tell an absent id from another party's Resource.
+      assertOwnsResource({ ownedBy, createdBy: prior?.created_by })
       const exists = prior !== undefined && !prior.deleted
       assertWritePrecondition({
         resourceId,
@@ -3740,6 +3839,9 @@ export class PostgresBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param options.custom {ResourceMetadataCustom | Record<string, unknown>}
+   * @param [options.ownedBy] {IDID[]}   the principals of the
+   *   `OwnResourcesOnly` caveats, checked against a live Resource's
+   *   `createdBy` before the preconditions and the write-once rule
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
    * @returns {Promise<ResourceMetadataWriteResult | undefined>}
@@ -3753,6 +3855,7 @@ export class PostgresBackend implements StorageBackend {
     resourceId,
     custom,
     epoch,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -3761,6 +3864,7 @@ export class PostgresBackend implements StorageBackend {
     resourceId: string
     custom: ResourceMetadataCustom | Record<string, unknown>
     epoch?: string
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<ResourceMetadataWriteResult | undefined> {
@@ -3814,11 +3918,12 @@ export class PostgresBackend implements StorageBackend {
           | 'meta_updated_at_counter'
           | 'meta_origin_id'
           | 'deleted'
+          | 'created_by'
         > & { content: Buffer | null }
       >(
         `SELECT generation, updated_at, updated_at_counter, origin_id,
                 meta_generation, meta_updated_at, meta_updated_at_counter,
-                meta_origin_id, deleted,
+                meta_origin_id, deleted, created_by,
                 CASE WHEN $4::boolean AND is_json THEN content END AS content
            FROM resources
           WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3
@@ -3829,6 +3934,9 @@ export class PostgresBackend implements StorageBackend {
       if (!prior || prior.deleted) {
         return undefined
       }
+      // The `OwnResourcesOnly` caveats, decided from the locked row before
+      // the precondition and the unique claim.
+      assertOwnsLiveRow({ ownedBy, row: prior })
       const priorMeta = metaStampOfRow(prior)
       // The `/meta` `ETag` a `GET` serves is the composite of the content
       // record's validator and the `/meta` record's, so the precondition is
@@ -3924,6 +4032,9 @@ export class PostgresBackend implements StorageBackend {
    * @param options.resourceId {string}
    * @param options.chunkIndex {number}   a non-negative safe integer
    * @param options.input {ResourceInput}
+   * @param [options.ownedBy] {IDID[]}   the principals of the
+   *   `OwnResourcesOnly` caveats, checked against the live parent's
+   *   `createdBy` before the preconditions and the write-once rule
    * @param [options.ifMatch] {string}
    * @param [options.ifNoneMatch] {HeldValidators}
    * @returns {Promise<EtagValidator>}   the chunk's new validator
@@ -3935,6 +4046,7 @@ export class PostgresBackend implements StorageBackend {
     chunkIndex,
     input,
     immutable,
+    ownedBy,
     ifMatch,
     ifNoneMatch
   }: {
@@ -3944,6 +4056,7 @@ export class PostgresBackend implements StorageBackend {
     chunkIndex: number
     input: ResourceInput
     immutable?: true | ImmutableUnder
+    ownedBy?: IDID[]
     ifMatch?: string
     ifNoneMatch?: HeldValidators
   }): Promise<EtagValidator> {
@@ -3960,13 +4073,17 @@ export class PostgresBackend implements StorageBackend {
       })
       // Parent Resource must exist (and not be a tombstone), so the parent
       // cannot be deleted between this check and the chunk write.
-      await this.#assertResourceLive({
+      const parentCreatedBy = await this.#assertResourceLive({
         client,
         spaceId,
         collectionId,
         resourceId,
         requestName: 'Write Chunk'
       })
+      // The `OwnResourcesOnly` caveats, decided against the parent held
+      // `FOR SHARE` above, before the chunk's precondition and the write-once
+      // rule.
+      assertOwnsResource({ ownedBy, createdBy: parentCreatedBy })
 
       // Lock the chunk row (if any, re-reading under the create lock when it
       // does not exist yet) and read its current validator/size, so the
@@ -4203,6 +4320,9 @@ export class PostgresBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param options.chunkIndex {number}
+   * @param [options.ownedBy] {IDID[]}   the principals of the
+   *   `OwnResourcesOnly` caveats, checked against the live parent's
+   *   `createdBy` before the preconditions and the write-once rule
    * @param [options.ifMatch] {string}
    * @returns {Promise<boolean>}
    */
@@ -4211,17 +4331,29 @@ export class PostgresBackend implements StorageBackend {
     collectionId,
     resourceId,
     chunkIndex,
-    ifMatch
+    ifMatch,
+    ownedBy
   }: {
     spaceId: string
     collectionId: string
     resourceId: string
     chunkIndex: number
     ifMatch?: string
+    ownedBy?: IDID[]
   }): Promise<boolean> {
     return this.#withTransaction(async client => {
       // First lock of the backend-wide order (`#lockSpaceRow`).
       await this.#lockSpaceRow({ client, spaceId })
+      // The `OwnResourcesOnly` caveats, decided against the parent Resource
+      // before the chunk is read. With no live parent the delete goes on as
+      // it does with no principals.
+      await this.#assertOwnsResource({
+        client,
+        spaceId,
+        collectionId,
+        resourceId,
+        ownedBy
+      })
       const { rows } = await client.query<
         StampColumns & { generation: string; size: string }
       >(
@@ -4904,7 +5036,7 @@ export class PostgresBackend implements StorageBackend {
    * @param options.collectionId {string}
    * @param options.resourceId {string}
    * @param options.requestName {string}
-   * @returns {Promise<void>}
+   * @returns {Promise<IDID[] | null>}   the live Resource's `created_by`
    */
   async #assertResourceLive({
     client,
@@ -4918,16 +5050,64 @@ export class PostgresBackend implements StorageBackend {
     collectionId: string
     resourceId: string
     requestName: string
-  }): Promise<void> {
-    const { rows } = await client.query<{ deleted: boolean }>(
-      `SELECT deleted FROM resources
+  }): Promise<IDID[] | null> {
+    const { rows } = await client.query<{
+      deleted: boolean
+      created_by: IDID[] | null
+    }>(
+      `SELECT deleted, created_by FROM resources
         WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3
         FOR SHARE`,
       [spaceId, collectionId, resourceId]
     )
-    if (!rows[0] || rows[0].deleted) {
+    const [row] = rows
+    if (!row || row.deleted) {
       throw new ResourceNotFoundError({ requestName })
     }
+    return row.created_by
+  }
+
+  /**
+   * Refuses a request under `OwnResourcesOnly` caveats at a live Resource the
+   * principals do not own (`assertOwnsLiveRow`), reading its row inside the
+   * caller's transaction. The caller holds the Space row lock, which every
+   * write of a Resource row takes first, so the row read here is the one the
+   * rest of the transaction reads. Reads nothing when `ownedBy` is absent or
+   * empty.
+   * @param options {object}
+   * @param options.client {pg.PoolClient}
+   * @param options.spaceId {string}
+   * @param options.collectionId {string}
+   * @param options.resourceId {string}
+   * @param [options.ownedBy] {IDID[]}   the principals, one per caveat
+   * @returns {Promise<void>}
+   * @throws {NotOwnResourceError}
+   */
+  async #assertOwnsResource({
+    client,
+    spaceId,
+    collectionId,
+    resourceId,
+    ownedBy
+  }: {
+    client: pg.PoolClient
+    spaceId: string
+    collectionId: string
+    resourceId: string
+    ownedBy?: IDID[]
+  }): Promise<void> {
+    if (ownedBy === undefined || ownedBy.length === 0) {
+      return
+    }
+    const { rows } = await client.query<{
+      deleted: boolean
+      created_by: IDID[] | null
+    }>(
+      `SELECT deleted, created_by FROM resources
+        WHERE space_id = $1 AND collection_id = $2 AND resource_id = $3`,
+      [spaceId, collectionId, resourceId]
+    )
+    assertOwnsLiveRow({ ownedBy, row: rows[0] })
   }
 
   /**

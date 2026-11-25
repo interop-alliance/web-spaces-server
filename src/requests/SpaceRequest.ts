@@ -169,7 +169,8 @@ export class SpaceRequest {
       spaceId,
       targetPath: spaceMetaPath({ spaceId }),
       requestName,
-      spaceMetadata
+      spaceMetadata,
+      ownResources: 'unaffected'
     })
 
     // `metaGeneration` / `metaLocal` are out-of-band `ETag` parts, not part
@@ -227,7 +228,8 @@ export class SpaceRequest {
       request,
       spaceId,
       targetPath: linksetPath({ spaceId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     const linkset = await buildLinkset({ storage, serverUrl, spaceId })
@@ -780,7 +782,8 @@ export class SpaceRequest {
       spaceId,
       targetPath: spacePath({ spaceId }),
       requestName,
-      allowTargetQuery: true
+      allowTargetQuery: true,
+      ownResources: 'unaffected'
     })
 
     // Tombstones are listed only for a capability holder; an unknown
@@ -834,7 +837,8 @@ export class SpaceRequest {
       request,
       spaceId,
       targetPath: backendsPath({ spaceId }),
-      requestName
+      requestName,
+      ownResources: 'unaffected'
     })
 
     return reply
